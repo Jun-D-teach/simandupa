@@ -26,11 +26,12 @@
     "multer": "^2.0.0",
     "mysql2": "^3.6.5",
     "qrcode": "^1.5.3",
-    "xlsx": "^0.18.5"
+    "vite": "^5.4.21",
+    "xlsx": "^0.18.5",
+     "concurrently": "^8.2.2",
+    "nodemon": "^3.0.2"   
   },
   "devDependencies": {
-    "concurrently": "^8.2.2",
-    "nodemon": "^3.0.2",
-    "vite": "^5.4.21"
+    
   }
 }
