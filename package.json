@@ -4,14 +4,13 @@
   "description": "Sistem Informasi Manajemen Terpadu MAN 2 Palembang",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
-    "dev:backend": "nodemon server.js",
-    "dev:frontend": "vite",
-     "prebuild": "npm install",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
+  "start": "node server.js",
+  "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+  "dev:backend": "nodemon server.js",
+  "dev:frontend": "vite",
+  "build": "vite build",
+  "preview": "vite preview"
+},
   "keywords": ["sim", "madrasah", "man2palembang", "simandupa"],
   "author": "Jun-D-teach",
   "license": "ISC",
