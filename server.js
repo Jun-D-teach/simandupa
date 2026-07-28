@@ -4,19 +4,67 @@ const bcrypt = require("bcrypt");
 const { sendWhatsApp } = require("./whatsapp");
 const express = require("express");
 const cors = require("cors");
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
 const multer = require("multer");
 const XLSX = require("xlsx");
 const { pool, testConnection } = require("./db");
 const path = require("path");
 const QRCode = require("qrcode");
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+const fs = require("fs");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-app.use(cors());
-app.use(express.json());
+// PENTING: Cari folder dist frontend
+function resolveClientDistPath() {
+  const candidates = [
+    path.join(__dirname, "sim-web", "dist"),  // Path baru
+    path.join(__dirname, "public"),
+    path.join(__dirname, "client"),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(path.join(candidate, "index.html"))) {
+      console.log(`✓ Frontend ditemukan di: ${candidate}`);
+      return candidate;
+    }
+  }
+
+  console.log("⚠ Frontend tidak ditemukan. Jalankan 'npm run build' terlebih dahulu.");
+  return candidates[0];
+}
+
+const clientDistPath = resolveClientDistPath();
+
+const allowedOrigins = new Set(
+  [
+    "http://localhost:4173",
+    "http://localhost:5173",
+    "https://simandupa.man2plg.sch.id",
+    process.env.FRONTEND_URL,
+  ].filter(Boolean),
+);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.has(origin)) {
+        callback(null, true);
+      } else {
+        callback(null, false);
+      }
+    },
+    credentials: true,
+  }),
+);
+
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// ... (lanjutkan dengan kode server.js yang sudah ada)
 app.use("/public", express.static(path.join(__dirname, "public")));
 
 function getAttendanceStatus(
@@ -78,31 +126,192 @@ function formatAttendanceId(dateObj, studentId) {
   return `${year}${month}${day}_${studentId}`;
 }
 
+async function ensureSchema() {
+  const requiredStatuses = [
+    "hadir",
+    "terlambat",
+    "sangat terlambat",
+    "pulang",
+    "tidak hadir",
+  ];
+
+  const [cols] = await pool.query(
+    `SELECT COLUMN_TYPE
+       FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'attendance'
+        AND COLUMN_NAME = 'status'`,
+  );
+  const columnType = cols.length ? String(cols[0].COLUMN_TYPE) : "";
+  const hasAllStatuses = requiredStatuses.every((status) =>
+    columnType.includes(`'${status}'`),
+  );
+  if (columnType && !hasAllStatuses) {
+    const enumDef = requiredStatuses.map((status) => `'${status}'`).join(",");
+    await pool.query(
+      `ALTER TABLE attendance MODIFY COLUMN status ENUM(${enumDef}) NOT NULL`,
+    );
+    console.log("Schema: enum attendance.status diperbarui");
+  }
+
+  await pool.query(
+    `INSERT IGNORE INTO scanners (scanner_id, scanner_name, location, status_active)
+     VALUES (?, ?, ?, 1)`,
+    ["SYSTEM", "Sistem Otomatis", "Auto"],
+  );
+
+  await pool.query(
+    `INSERT IGNORE INTO settings (setting_key, setting_value) VALUES (?, ?)`,
+    ["absent_notify_time", "08:00"],
+  );
+}
+
+async function markAbsentStudentsAndNotify(nowArg) {
+const now = getWIBDate(nowArg || new Date());
+  const attendanceDate = formatDateToYmd(now);
+  const attendanceTime = formatTimeToHms(now);
+
+  let connection;
+  let processed = 0;
+  let notified = 0;
+
+  try {
+    connection = await pool.getConnection();
+
+    const [students] = await connection.query(
+      `SELECT s.*
+         FROM students s
+        WHERE s.status_active = 'aktif'
+          AND NOT EXISTS (
+            SELECT 1 FROM attendance a
+             WHERE a.student_id = s.student_id
+               AND a.attendance_date = ?
+          )`,
+      [attendanceDate],
+    );
+
+    for (const student of students) {
+      const attendanceId = formatAttendanceId(now, student.student_id);
+      try {
+        await connection.beginTransaction();
+
+        await connection.query(
+          "INSERT INTO attendance (attendance_id, student_id, student_name, class_id, attendance_date, attendance_time, status, scanner_id, notification_sent) VALUES (?,?,?,?,?,?,?,?,0)",
+          [
+            attendanceId,
+            student.student_id,
+            student.student_name,
+            student.class_id,
+            attendanceDate,
+            attendanceTime,
+            "tidak hadir",
+            "SYSTEM",
+          ],
+        );
+
+        if (student.parent_phone) {
+          const message = `Yth. Orang Tua/Wali Ananda ${student.student_name} (${student.class_id}). Sampai pukul ${attendanceTime.slice(0, 5)} ananda TIDAK HADIR / belum melakukan absensi di madrasah pada ${attendanceDate}. Mohon konfirmasi ke pihak madrasah apabila ada keperluan. Terima kasih.`;
+          const waResult = await sendWhatsApp(student.parent_phone, message);
+
+          await connection.query(
+            "INSERT INTO notifications (notification_id, attendance_id, student_id, parent_id, parent_name, parent_phone, message, channel, status) VALUES (?,?,?,?,?,?,?,?,?)",
+            [
+              `${attendanceId}_A`,
+              attendanceId,
+              student.student_id,
+              student.parent_id,
+              student.parent_name,
+              student.parent_phone,
+              message,
+              "whatsapp",
+              waResult.success ? "sent" : "failed",
+            ],
+          );
+
+          if (waResult.success) {
+            await connection.query(
+              "UPDATE attendance SET notification_sent = 1 WHERE attendance_id = ?",
+              [attendanceId],
+            );
+            notified += 1;
+          }
+        }
+
+        await connection.commit();
+        processed += 1;
+      } catch (err) {
+        await connection.rollback();
+        console.error(
+          `ABSENT NOTIFY ERROR (${student.student_id}):`,
+          err.message,
+        );
+      }
+    }
+  } catch (error) {
+    console.error("MARK ABSENT ERROR:", error.message);
+    throw error;
+  } finally {
+    if (connection) connection.release();
+  }
+
+  return { processed, notified };
+}
+
+let lastAbsentRunDate = null;
+async function absentSchedulerTick() {
+  try {
+    const [rows] = await pool.query(
+      "SELECT setting_value FROM settings WHERE setting_key = 'absent_notify_time' LIMIT 1",
+    );
+    const configured = rows.length ? String(rows[0].setting_value || "").trim() : "";
+    if (!configured) return;
+
+    const target = configured.slice(0, 5);
+   const now = getWIBDate(new Date());
+    const current = `${String(now.getHours()).padStart(2, "0")}:${String(
+      now.getMinutes(),
+    ).padStart(2, "0")}`;
+    const today = formatDateToYmd(now);
+
+    if (current === target && lastAbsentRunDate !== today) {
+      lastAbsentRunDate = today;
+      const result = await markAbsentStudentsAndNotify(now);
+      console.log(
+        `Absent notify dijalankan (${today}): ${result.processed} ditandai tidak hadir, ${result.notified} WA terkirim`,
+      );
+    }
+  } catch (error) {
+    console.error("ABSENT SCHEDULER ERROR:", error.message);
+  }
+}
+
 function excelDateToFormatted(value) {
   if (value === undefined || value === null || value === "") {
     return null;
   }
-
   if (typeof value === "number") {
     const parsed = XLSX.SSF.parse_date_code(value);
     if (!parsed) return null;
-
     const day = String(parsed.d).padStart(2, "0");
     const month = String(parsed.m).padStart(2, "0");
     const year = String(parsed.y);
-
     return `${day}/${month}/${year}`;
   }
-
   return String(value).trim();
 }
+
+// ==========================================
+// TAMBAHKAN FUNGSI INI DI SINI (Konversi ke WIB)
+// ==========================================
+function getWIBDate(dateObj = new Date()) {
+  // WIB = UTC+7
+  const utc = dateObj.getTime() + (dateObj.getTimezoneOffset() * 60000);
+  const wibTime = new Date(utc + (3600000 * 7));
+  return wibTime;
+}
+
 function verifyAdminApiKey(req, res, next) {
-    console.log('NODE_ENV:', process.env.NODE_ENV);
-  console.log('ADMIN_API_KEY from env:', process.env.ADMIN_API_KEY);
-  console.log('x-admin-key from header:', req.headers["x-admin-key"]);
-   if (process.env.NODE_ENV === 'development') {
-    return next();
-  }
+
   const apiKey = req.headers["x-admin-key"];
 
   if (!apiKey) {
@@ -121,7 +330,7 @@ function verifyAdminApiKey(req, res, next) {
 
   next();
 }
-app.get("/", (req, res) => {
+app.get("/api", (req, res) => {
   res.json({
     success: true,
     message: "SIM Mandupa API aktif",
@@ -145,6 +354,7 @@ app.get("/api/health", async (req, res) => {
     });
   }
 });
+
 app.get("/api/students/generate-id", verifyAdminApiKey, async (req, res) => {
   try {
     const year = new Date().getFullYear();
@@ -1139,12 +1349,12 @@ app.post("/api/attendance", async (req, res) => {
     if (student.status_active !== "aktif")
       throw { status: 400, message: "Siswa tidak aktif" };
 
-    const config = Object.fromEntries(
-      settingsRows.map((s) => [s.setting_key, s.setting_value]),
-    );
-    const now = new Date();
-    const attendanceDate = formatDateToYmd(now);
-    const attendanceTime = formatTimeToHms(now);
+const config = Object.fromEntries(
+  settingsRows.map((s) => [s.setting_key, s.setting_value]),
+);
+const now = getWIBDate(); // Gunakan waktu WIB
+const attendanceDate = formatDateToYmd(now);
+const attendanceTime = formatTimeToHms(now);
     const attendanceSeconds = parseTimeToSeconds(attendanceTime);
 
     const openSeconds = parseTimeToSeconds(config.attendance_open_time);
@@ -1271,7 +1481,9 @@ app.post("/api/attendance", async (req, res) => {
     if (connection) connection.release();
   }
 });
-
+app.get("/api/admin-key", (req, res) => {
+  res.json({ admin_key: process.env.ADMIN_API_KEY || "" });
+});
 app.post("/api/login", async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -1318,9 +1530,13 @@ app.post("/api/login", async (req, res) => {
       });
     }
 
+    // Hanya untuk admin / role tertentu
+    const isAdmin = user.role === "admin" || user.role === "superadmin";
+
     res.json({
       success: true,
       message: "Login berhasil",
+      admin_key: isAdmin ? process.env.ADMIN_API_KEY || "" : "",
       user: {
         id: user.id,
         username: user.username,
@@ -1744,7 +1960,200 @@ app.post(
     }
   },
 );
+app.post(
+  "/api/import/teachers",
+  verifyAdminApiKey,
+  upload.single("file"),
+  async (req, res) => {
+    let connection;
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: "File Excel wajib diupload",
+        });
+      }
 
+      const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const data = XLSX.utils.sheet_to_json(sheet, {
+        raw: true,
+        defval: "",
+      });
+
+      if (data.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "File kosong",
+        });
+      }
+
+      connection = await pool.getConnection();
+      await connection.beginTransaction();
+
+      let inserted = 0;
+      let skipped = 0;
+      let errors = [];
+
+      for (const row of data) {
+        try {
+          const teacher_id = String(row.teacher_id || "").trim();
+          const teacher_name = String(row.teacher_name || "").trim();
+          const nip = String(row.nip || "").trim();
+          const phone = String(row.phone || "").trim();
+          const email = String(row.email || "").trim();
+          const status_active = String(row.status_active || "aktif").trim();
+          const roles = String(row.roles || "guru")
+            .split(",")
+            .map((r) => r.trim())
+            .filter((r) => r);
+
+          // Validasi data wajib
+          if (!teacher_id || !teacher_name) {
+            errors.push({
+              row: data.indexOf(row) + 1,
+              message: "teacher_id dan teacher_name wajib diisi",
+            });
+            skipped++;
+            continue;
+          }
+
+          // Username dari NIP atau email
+          const username = nip || email;
+          if (!username) {
+            errors.push({
+              row: data.indexOf(row) + 1,
+              message: "NIP atau email wajib diisi untuk username",
+            });
+            skipped++;
+            continue;
+          }
+
+          // Cek apakah guru sudah ada
+          const [existingTeacher] = await connection.query(
+            "SELECT teacher_id FROM teachers WHERE teacher_id = ? LIMIT 1",
+            [teacher_id]
+          );
+
+          if (existingTeacher.length > 0) {
+            // Update guru yang sudah ada
+            const defaultPassword = "default12345";
+            const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+
+            await connection.query(
+              `
+              UPDATE teachers
+              SET
+                teacher_name = ?,
+                nip = ?,
+                phone = ?,
+                email = ?,
+                username = ?,
+                status_active = ?,
+                password = COALESCE(password, ?),
+                updated_at = CURRENT_TIMESTAMP
+              WHERE teacher_id = ?
+              `,
+              [
+                teacher_name,
+                nip || null,
+                phone || null,
+                email || null,
+                username,
+                status_active || "aktif",
+                hashedPassword,
+                teacher_id,
+              ]
+            );
+
+            // Update roles
+            await connection.query(
+              "DELETE FROM teacher_roles WHERE teacher_id = ?",
+              [teacher_id]
+            );
+          } else {
+            // Insert guru baru
+            const defaultPassword = "default12345";
+            const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+
+            await connection.query(
+              `
+              INSERT INTO teachers (
+                teacher_id,
+                teacher_name,
+                nip,
+                phone,
+                email,
+                username,
+                password,
+                status_active
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              `,
+              [
+                teacher_id,
+                teacher_name,
+                nip || null,
+                phone || null,
+                email || null,
+                username,
+                hashedPassword,
+                status_active || "aktif",
+              ]
+            );
+          }
+
+          // Insert roles
+          const selectedRoles = roles.length ? roles : ["guru"];
+          if (!selectedRoles.includes("guru")) {
+            selectedRoles.unshift("guru");
+          }
+
+          for (const role of selectedRoles) {
+            await connection.query(
+              `
+              INSERT INTO teacher_roles (teacher_id, role)
+              VALUES (?, ?)
+              ON DUPLICATE KEY UPDATE role = VALUES(role)
+              `,
+              [teacher_id, role]
+            );
+          }
+
+          inserted++;
+        } catch (rowError) {
+          console.error("Error processing row:", rowError);
+          errors.push({
+            row: data.indexOf(row) + 1,
+            message: rowError.message,
+          });
+          skipped++;
+        }
+      }
+
+      await connection.commit();
+
+      res.json({
+        success: true,
+        message: "Import guru berhasil",
+        total: data.length,
+        inserted,
+        skipped,
+        errors: errors.length > 0 ? errors : undefined,
+      });
+    } catch (error) {
+      if (connection) await connection.rollback();
+      console.error("IMPORT TEACHERS ERROR:", error);
+      res.status(500).json({
+        success: false,
+        message: "Gagal import data guru",
+        error: error.message,
+      });
+    } finally {
+      if (connection) connection.release();
+    }
+  }
+);
 app.get("/api/classes", verifyAdminApiKey, async (req, res) => {
   try {
     const [rows] = await pool.query(
@@ -2422,6 +2831,24 @@ app.post("/api/settings", verifyAdminApiKey, async (req, res) => {
     if (connection) connection.release();
   }
 });
+app.post("/api/attendance/mark-absent", verifyAdminApiKey, async (req, res) => {
+  try {
+    const result = await markAbsentStudentsAndNotify();
+    res.json({
+      success: true,
+      message: `Selesai. ${result.processed} siswa ditandai tidak hadir, ${result.notified} WA terkirim.`,
+      data: result,
+    });
+  } catch (error) {
+    console.error("MARK ABSENT API ERROR:", error);
+    res.status(500).json({
+      success: false,
+      message: "Gagal menandai siswa tidak hadir",
+      error: error.message,
+    });
+  }
+});
+
 //app.get("/api/export/report", verifyAdminApiKey, async (req, res) => {
 app.get("/api/export/report", async (req, res) => {
   try {
@@ -3834,11 +4261,43 @@ app.get("/api/export/homeroom-time-report", async (req, res) => {
     res.status(500).send("Gagal mencetak laporan jam datang dan pulang");
   }
 });
-app.listen(PORT, async () => {
+
+app.use(express.static(path.join(__dirname, 'dist')));
+const db = require('./db');
+app.get("*", (req, res) => {
+  if (req.path.startsWith("/api")) {
+    return res.status(404).json({
+      success: false,
+      message: "Endpoint API tidak ditemukan",
+    });
+  }
+
+  res.sendFile(path.join(clientDistPath, "index.html"), (error) => {
+    if (error) {
+      res.status(404).json({
+        success: false,
+        message:
+          "Frontend belum dibuild. Jalankan npm run build terlebih dahulu.",
+      });
+    }
+  });
+});
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
+app.listen(PORT, "0.0.0.0", async () => {
+  const frontendReady = fs.existsSync(path.join(clientDistPath, "index.html"));
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Frontend path: ${clientDistPath}`);
+  console.log(`Frontend ready: ${frontendReady}`);
+
   try {
     await testConnection();
-    console.log(`Server running on http://localhost:${PORT}`);
+    await ensureSchema();
+    setInterval(absentSchedulerTick, 60 * 1000);
+    console.log("Penjadwal absen otomatis aktif (cek tiap menit)");
   } catch (error) {
-    console.error("Server started but DB test failed:", error.message);
+    console.error("Server started but DB setup failed:", error.message);
   }
 });
