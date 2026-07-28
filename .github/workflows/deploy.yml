@@ -19,29 +19,29 @@ jobs:
         with:
           node-version: '20'
           
-      # Install root dependencies
+      # STEP 1: Install root dependencies
       - name: Install root dependencies
         run: npm install
         
-      # Install backend dependencies
+      # STEP 2: Install backend dependencies
       - name: Install backend dependencies
         run: |
           cd backend
           npm install
           
-      # Install sim-web dependencies (INI YANG FIX ERROR VITE!)
+      # STEP 3: Install sim-web dependencies (INI YANG PENTING!)
       - name: Install sim-web dependencies
         run: |
           cd sim-web
           npm install
           
-      # Build frontend
+      # STEP 4: Build frontend
       - name: Build frontend
         run: |
           cd sim-web
           npm run build
           
-      # Deploy to Hostinger via FTP
+      # STEP 5: Deploy to Hostinger
       - name: Deploy to Hostinger via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.4
         with:
@@ -64,7 +64,3 @@ jobs:
             **/.env
             **/tests/**
             **/.github/**
-            
-      - name: Deployment Status
-        if: success()
-        run: echo "✅ Deployment berhasil ke Hostinger!"
