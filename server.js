@@ -21,7 +21,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 // PENTING: Cari folder dist frontend
 function resolveClientDistPath() {
   const candidates = [
-    path.join(__dirname, "sim-web", "dist"),  // Path baru
+    path.join(__dirname, "dist"),  // Path baru
     path.join(__dirname, "public"),
     path.join(__dirname, "client"),
   ];
@@ -4281,9 +4281,6 @@ app.get("*", (req, res) => {
       });
     }
   });
-});
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
 app.listen(PORT, "0.0.0.0", async () => {
