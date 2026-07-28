@@ -18,19 +18,22 @@ const fs = require("fs");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
+// PENTING: Cari folder dist frontend
 function resolveClientDistPath() {
   const candidates = [
+    path.join(__dirname, "sim-web", "dist"),  // Path baru
     path.join(__dirname, "public"),
-    path.join(__dirname, "sim-web", "dist"),
     path.join(__dirname, "client"),
   ];
 
   for (const candidate of candidates) {
     if (fs.existsSync(path.join(candidate, "index.html"))) {
+      console.log(`✓ Frontend ditemukan di: ${candidate}`);
       return candidate;
     }
   }
 
+  console.log("⚠ Frontend tidak ditemukan. Jalankan 'npm run build' terlebih dahulu.");
   return candidates[0];
 }
 
@@ -40,7 +43,7 @@ const allowedOrigins = new Set(
   [
     "http://localhost:4173",
     "http://localhost:5173",
-    "https://sim.man2plg.sch.id",
+    "https://simandupa.man2plg.sch.id",
     process.env.FRONTEND_URL,
   ].filter(Boolean),
 );
@@ -50,20 +53,18 @@ app.use(
     origin(origin, callback) {
       if (!origin || allowedOrigins.has(origin)) {
         callback(null, true);
-        return;
+      } else {
+        callback(null, false);
       }
-
-      if (/^https:\/\/[a-z0-9.-]+\.man2plg\.sch\.id$/i.test(origin)) {
-        callback(null, true);
-        return;
-      }
-
-      callback(new Error(`CORS blocked: ${origin}`));
     },
     credentials: true,
   }),
 );
-app.use(express.json());
+
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// ... (lanjutkan dengan kode server.js yang sudah ada)
 app.use("/public", express.static(path.join(__dirname, "public")));
 
 function getAttendanceStatus(

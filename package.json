@@ -1,17 +1,22 @@
 {
-  "name": "sim-madrasah",
+  "name": "simandupa",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Sistem Informasi Manajemen Terpadu MAN 2 Palembang",
+  "main": "backend/server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node backend/server.js",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && nodemon server.js",
+    "dev:frontend": "cd sim-web && npm run dev",
+    "build": "cd sim-web && npm run build",
+    "install:all": "npm install && cd backend && npm install && cd ../sim-web && npm install"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": ["sim", "madrasah", "man2palembang", "simandupa"],
+  "author": "Jun-D-teach",
   "license": "ISC",
-  "type": "commonjs",
-  "dependencies": {
-    "firebase": "^12.11.0",
-    "html5-qrcode": "^2.3.8"
+  "dependencies": {},
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "nodemon": "^3.0.2"
   }
 }

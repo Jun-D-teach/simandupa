@@ -1,0 +1,56 @@
+name: Deploy to Hostinger
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          
+      - name: Install all dependencies
+        run: |
+          npm install
+          cd backend && npm install
+          cd ../sim-web && npm install
+        
+      - name: Build frontend
+        run: cd sim-web && npm run build
+        
+      - name: Deploy to Hostinger via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.4
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          server-dir: /public_html/
+          local-dir: ./
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+            **/sim-web/src/**
+            **/sim-web/public/**
+            **/sim-web/vite.config.js
+            **/sim-web/package-lock.json
+            **/backend/package-lock.json
+            **/package-lock.json
+            **/*.md
+            **/.env
+            **/tests/**
+            
+      - name: Deployment Status
+        if: success()
+        run: echo "✅ Deployment berhasil ke Hostinger!"
