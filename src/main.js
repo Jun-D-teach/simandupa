@@ -16,7 +16,14 @@ import { initTeacherPortalPage } from "./teacherPortalPage";
 const params = new URLSearchParams(window.location.search);
 const SCANNER_ID = params.get("scanner") || "SCN-001";
 const PAGE = params.get("page") || "scanner";
-const API_URL = "http://localhost:3000";
+const getApiUrl = () => {
+  if (import.meta.env.DEV) {
+    return 'http://localhost:3000/api'; // Untuk development lokal
+  }
+  return '/api'; // Untuk production (mengikuti domain)
+};
+
+export const API_BASE_URL = getApiUrl();
 
 console.log("Mode halaman:", PAGE);
 console.log("Scanner aktif:", SCANNER_ID);
