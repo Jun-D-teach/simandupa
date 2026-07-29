@@ -1,11 +1,4 @@
-const getApiUrl = () => {
-  if (import.meta.env.DEV) {
-    return 'http://localhost:3000/api'; // Untuk development lokal
-  }
-  return '/api'; // Untuk production (mengikuti domain)
-};
-
-export const API_BASE_URL = getApiUrl();
+const API_URL = "http://localhost:3000";
 const ADMIN_API_KEY = "123456";
 async function initLoginPage() {
   const loginBtn = document.getElementById("loginBtn");
