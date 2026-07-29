@@ -12,7 +12,7 @@ import { initClassesPage } from "./classesPage";
 import { initTeachersPage } from "./teachersPage";
 import { initTeacherLoginPage } from "./teacherLoginPage";
 import { initTeacherPortalPage } from "./teacherPortalPage";
-import { initImportGuruPage } from "./importGuruPage"; // Pastikan nama file sesuai
+import { initImportGuruPage } from "./ImportGuruPage"; // Pastikan nama file sesuai
 
 const params = new URLSearchParams(window.location.search);
 const SCANNER_ID = params.get("scanner") || "SCN-001";
