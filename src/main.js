@@ -670,36 +670,64 @@ function renderPlaceholderPage(title, description) {
     document.getElementById("logoutBtn")?.addEventListener("click", logout);
   }
   } else if (PAGE === "import") {
-    if (!requireAuth()) {
-      //
-    } else {
-      await syncAcademicInfo();
+  if (!requireAuth()) {
+    // redirect ke login
+  } else {
+    await syncAcademicInfo();
 
-      document.querySelector("#app").innerHTML = getSidebarLayout(
-        "Import Data Siswa",
-        "Upload file Excel untuk memasukkan data siswa ke MySQL.",
-        `
-          <div style="max-width: 720px; background:white; padding:20px; border-radius:12px; border:1px solid #e5e7eb;">
-            <div style="margin-bottom:16px;">
-              <label for="excelFile"><b>Pilih file Excel</b></label><br /><br />
-              <input type="file" id="excelFile" accept=".xlsx,.xls" />
-            </div>
-
-            <button id="uploadBtn" style="padding:10px 16px; background:#16a34a; color:white; border:none; border-radius:8px; cursor:pointer;">
-              Upload Excel
-            </button>
-
-            <div id="importResult" style="margin-top:20px;"></div>
+    document.querySelector("#app").innerHTML = getSidebarLayout(
+      "Import Data Siswa",
+      "Upload file Excel untuk memasukkan data siswa ke MySQL.",
+      `
+        <div class="bg-white rounded-lg shadow p-6">
+          <div class="mb-4">
+            <!-- Tombol Download Template -->
+            <a href="#" id="downloadSiswaTemplateBtn" class="inline-block mb-3 text-sm text-blue-600 hover:underline">
+              ⬇️ Download Template Excel Siswa
+            </a>
+            
+            <!-- Input File - PASTIKAN ID INI BENAR -->
+            <label class="block text-sm font-medium mb-2">Pilih file Excel</label>
+            <input 
+              type="file" 
+              id="excelSiswaFile" 
+              accept=".xlsx,.xls" 
+              class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" 
+            />
           </div>
-        `
-      );
+          
+          <!-- Tombol Upload -->
+          <button 
+            id="uploadSiswaBtn" 
+            class="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded"
+          >
+            Upload Excel
+          </button>
+          
+          <!-- Hasil Import -->
+          <div id="importSiswaResult" class="mt-4"></div>
+          
+          <!-- Panduan -->
+          <div class="mt-6 p-4 bg-blue-50 rounded text-sm">
+            <h4 class="font-bold mb-2">Panduan Format Excel:</h4>
+            <ul class="list-disc list-inside space-y-1 text-gray-700">
+              <li>Kolom wajib: <b>student_id</b>, <b>student_name</b>, <b>class_id</b></li>
+              <li>Kolom opsional: nis, nisn, gender, birth_place, birth_date, address, religion, entry_year, status_active, parent_name, parent_phone, parent_email, parent_relation</li>
+              <li>Gender: <b>L</b> (Laki-laki) atau <b>P</b> (Perempuan)</li>
+              <li>Status aktif: <b>aktif</b> atau <b>nonaktif</b></li>
+              <li>Parent relation: <b>ayah</b>, <b>ibu</b>, atau <b>wali</b></li>
+            </ul>
+          </div>
+        </div>
+      `
+    );
 
-      initImportPage();
-      initSidebarToggle();
-      document.getElementById("logoutBtn")?.addEventListener("click", logout);
-    }
-
-  } else if (PAGE === "settings") {
+    // Inisialisasi halaman import
+    initImportPage();
+    initSidebarToggle();
+    document.getElementById("logoutBtn")?.addEventListener("click", logout);
+  }
+} else if (PAGE === "settings") {
     if (!requireAuth()) return;
 
     document.querySelector("#app").innerHTML = getSidebarLayout(
