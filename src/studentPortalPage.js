@@ -1,3 +1,5 @@
+import { API_URL } from "./config";
+
 export function initStudentPortalPage() {
   const studentData = JSON.parse(localStorage.getItem("simStudent") || "{}");
 
@@ -142,7 +144,7 @@ loadStudentAttendance(studentData.student_id);
   const resultBox = document.getElementById("changePasswordResult");
 
   try {
-    const response = await fetch("http://localhost:3000/api/student/change-password", {
+    const response = await fetch(`${API_URL}/api/student/change-password`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -178,7 +180,7 @@ async function exportStudentAttendanceCsv(studentData, month, year) {
     if (year) params.append("year", year);
 
     const response = await fetch(
-      `http://localhost:3000/api/student/${studentData.student_id}/attendance?${params.toString()}`
+      `${API_URL}/api/student/${studentData.student_id}/attendance?${params.toString()}`
     );
 
     const result = await response.json();
@@ -289,7 +291,7 @@ async function exportStudentAttendancePdf(studentData, month, year) {
     if (year) params.append("year", year);
 
     const response = await fetch(
-      `http://localhost:3000/api/student/${studentData.student_id}/attendance?${params}`
+      `${API_URL}/api/student/${studentData.student_id}/attendance?${params}`
     );
 
     const result = await response.json();
@@ -375,7 +377,7 @@ async function loadStudentAttendance(studentId, month, year) {
     if (month) params.append("month", month);
     if (year) params.append("year", year);
 
-    const response = await fetch(`http://localhost:3000/api/student/${studentId}/attendance?${params.toString()}`);
+    const response = await fetch(`${API_URL}/api/student/${studentId}/attendance?${params.toString()}`);
     const result = await response.json();
 
     if (!result.success) {

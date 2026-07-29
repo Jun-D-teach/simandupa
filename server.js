@@ -1,4 +1,11 @@
-require("dotenv").config();
+const path = require("path");
+const fs = require("fs");
+
+require("dotenv").config({ path: path.join(__dirname, ".env") });
+const productionEnvPath = path.join(__dirname, ".env.production");
+if (fs.existsSync(productionEnvPath)) {
+  require("dotenv").config({ path: productionEnvPath, override: true });
+}
 
 const bcrypt = require("bcrypt");
 const { sendWhatsApp } = require("./whatsapp");
@@ -11,10 +18,7 @@ const PORT = process.env.PORT || 3000;
 const multer = require("multer");
 const XLSX = require("xlsx");
 const { pool, testConnection } = require("./db");
-const path = require("path");
 const QRCode = require("qrcode");
-
-const fs = require("fs");
 
 const upload = multer({ storage: multer.memoryStorage() });
 

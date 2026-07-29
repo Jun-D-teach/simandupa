@@ -16,7 +16,7 @@ import { initTeacherPortalPage } from "./teacherPortalPage";
 const params = new URLSearchParams(window.location.search);
 const SCANNER_ID = params.get("scanner") || "SCN-001";
 const PAGE = params.get("page") || "scanner";
-const API_URL = "http://localhost:3000";
+import { API_URL } from "./config";
 console.log("Mode halaman:", PAGE);
 console.log("Scanner aktif:", SCANNER_ID);
 

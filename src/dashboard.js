@@ -1,4 +1,4 @@
-const API_URL = "http://localhost:3000";
+import { API_URL } from "./config";
 
 function getAdminHeaders() {
   const adminKey = localStorage.getItem("simAdminKey") || "";

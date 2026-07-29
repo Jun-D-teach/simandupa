@@ -1,4 +1,4 @@
-const API_URL = "http://localhost:3000";
+import { API_URL } from "./config";
 const ADMIN_API_KEY = "simmandupa2026secure";
 async function initLoginPage() {
   const loginBtn = document.getElementById("loginBtn");

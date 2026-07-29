@@ -1,4 +1,4 @@
-const API_URL = "http://localhost:3000";
+import { API_URL } from "./config";
 
 async function initImportPage() {
   const uploadBtn = document.getElementById("uploadBtn");

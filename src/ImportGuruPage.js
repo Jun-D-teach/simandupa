@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { API_URL } from "./config";
 
 function ImportGuruPage() {
   const [file, setFile] = useState(null);
@@ -21,7 +21,7 @@ function ImportGuruPage() {
     formData.append("file", file);
 
     try {
-      const response = await fetch("http://localhost:3000/api/import/teachers", {
+      const response = await fetch(`${API_URL}/api/import/teachers`, {
         method: "POST",
         headers: {
           "x-admin-key": localStorage.getItem("simAdminKey"),

@@ -1,6 +1,6 @@
 import { Html5QrcodeScanner } from "html5-qrcode";
 
-const API_URL = "http://localhost:3000";
+import { API_URL } from "./config";
 
 async function saveAttendance(studentId, scannerId) {
   try {
