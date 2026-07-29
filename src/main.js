@@ -12,6 +12,7 @@ import { initClassesPage } from "./classesPage";
 import { initTeachersPage } from "./teachersPage";
 import { initTeacherLoginPage } from "./teacherLoginPage";
 import { initTeacherPortalPage } from "./teacherPortalPage";
+import { initImportGuruPage } from "./importGuruPage"; // Pastikan nama file sesuai
 
 const params = new URLSearchParams(window.location.search);
 const SCANNER_ID = params.get("scanner") || "SCN-001";
@@ -129,7 +130,8 @@ function getSidebarLayout(pageTitle, pageDescription, contentHtml) {
           ${getSidebarLink("students", "Siswa", "🎓")}
           ${getSidebarLink("teachers", "Guru", "👨‍🏫")}
           ${getSidebarLink("report", "Laporan", "🧾")}
-          ${getSidebarLink("import", "Import Excel", "📥")}
+          ${getSidebarLink("import-guru", "Import Guru", "📤")}
+          ${getSidebarLink("import", "Import Siswa", "📥")}
           ${getSidebarLink("settings", "Settings", "⚙️")}
         </nav>
 
@@ -630,7 +632,43 @@ function renderPlaceholderPage(title, description) {
       document.getElementById("logoutBtn")?.addEventListener("click", logout);
       initClassesPage();
     }
+} else if (PAGE === "import-guru") {
+  if (!requireAuth()) {
+    //
+  } else {
+    await syncAcademicInfo();
 
+    document.querySelector("#app").innerHTML = getSidebarLayout(
+      "Import Data Guru",
+      "Upload file Excel untuk memasukkan data guru ke MySQL.",
+      `
+        <div class="bg-white rounded-lg shadow p-6">
+          <div class="mb-4">
+            <a href="#" id="downloadGuruTemplateBtn" class="inline-block mb-3 text-sm text-blue-600 hover:underline">⬇️ Download Template Excel Guru</a>
+            <label class="block text-sm font-medium mb-2">Pilih file Excel</label>
+            <input type="file" id="excelGuruFile" accept=".xlsx,.xls" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
+          </div>
+          <button id="uploadGuruBtn" class="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded">Upload Excel</button>
+          <div id="importGuruResult" class="mt-4"></div>
+          
+          <div class="mt-6 p-4 bg-blue-50 rounded text-sm">
+            <h4 class="font-bold mb-2">Panduan Format Excel:</h4>
+            <ul class="list-disc list-inside space-y-1 text-gray-700">
+              <li>Kolom wajib: <b>teacher_id</b>, <b>teacher_name</b></li>
+              <li>Salah satu harus ada: <b>nip</b> atau <b>email</b> (untuk username)</li>
+              <li>Kolom opsional: phone, status_active, roles</li>
+              <li>Roles dipisah koma (contoh: guru,wali_kelas)</li>
+              <li>Password default untuk guru baru: <b>default12345</b></li>
+            </ul>
+          </div>
+        </div>
+      `
+    );
+
+    initImportGuruPage();
+    initSidebarToggle();
+    document.getElementById("logoutBtn")?.addEventListener("click", logout);
+  }
   } else if (PAGE === "import") {
     if (!requireAuth()) {
       //

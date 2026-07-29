@@ -1,159 +1,171 @@
+// src/importGuruPage.js
+import * as XLSX from 'xlsx';
 import { API_URL } from "./config";
 
-function ImportGuruPage() {
-  const [file, setFile] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
+async function initImportGuruPage() {
+  const uploadBtn = document.getElementById("uploadGuruBtn");
+  const excelFile = document.getElementById("excelGuruFile");
+  const importResult = document.getElementById("importGuruResult");
+  const downloadTemplateBtn = document.getElementById("downloadGuruTemplateBtn");
 
-  const handleFileChange = (e) => {
-    setFile(e.target.files[0]);
-    setResult(null);
-  };
+  if (!uploadBtn || !excelFile || !importResult) return;
 
-  const handleUpload = async () => {
-    if (!file) {
-      alert("Pilih file Excel terlebih dahulu");
-      return;
-    }
+  // Cek adminKey saja (yang penting untuk API call)
+  const adminKey = localStorage.getItem("simAdminKey") || "";
+  
+  // DEBUG: Lihat di console apa yang tersimpan
+  console.log("=== DEBUG IMPORT GURU ===");
+  console.log("Admin Key:", adminKey ? "✅ Ada" : "❌ Tidak ada");
+  console.log("User Role:", localStorage.getItem("simUserRole"));
+  console.log("Semua localStorage keys:", Object.keys(localStorage));
+  console.log("========================");
 
-    setLoading(true);
-    const formData = new FormData();
-    formData.append("file", file);
+  // Tampilkan info status
+  const statusDiv = document.createElement("div");
+  statusDiv.className = "mb-4 p-3 rounded text-sm";
+  
+  if (!adminKey) {
+    statusDiv.className += " bg-red-50 text-red-700";
+    statusDiv.innerHTML = `
+      <p class="font-bold">❌ Admin Key tidak ditemukan!</p>
+      <p class="mt-1">Silakan login ulang sebagai admin.</p>
+      <a href="#login" class="text-blue-600 hover:underline mt-2 inline-block">Login sekarang →</a>
+    `;
+    uploadBtn.disabled = true;
+    if (downloadTemplateBtn) downloadTemplateBtn.disabled = true;
+  } else {
+    statusDiv.className += " bg-green-50 text-green-700";
+    statusDiv.innerHTML = `
+      <p class="font-bold">✅ Login terdeteksi sebagai Admin</p>
+      <p class="text-xs mt-1">Admin Key: ${adminKey.substring(0, 10)}...</p>
+    `;
+  }
+  
+  importResult.parentNode.insertBefore(statusDiv, importResult);
 
+  // 1. Fitur Download Template (GENERATE DI FRONTEND)
+  if (downloadTemplateBtn) {
+    downloadTemplateBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      
+      if (!adminKey) {
+        alert("⚠️ Anda harus login sebagai admin terlebih dahulu!");
+        return;
+      }
+      
+      downloadTemplateBtn.textContent = " Membuat template...";
+      
+      try {
+        const wb = XLSX.utils.book_new();
+        
+        const data = [
+          ["teacher_id", "teacher_name", "nip", "email", "phone", "status_active", "roles"],
+          ["GURU001", "Contoh Nama Guru", "199001012020011001", "guru@man2palembang.sch.id", "08123456789", "1", "guru,wali_kelas"],
+          ["GURU002", "Nama Guru Kedua", "199102022021021002", "guru2@man2palembang.sch.id", "08123456788", "1", "guru"],
+          ["", "", "", "", "", "", ""],
+          ["", "", "", "", "", "", ""],
+          ["", "", "", "", "", "", ""],
+        ];
+
+        const ws = XLSX.utils.aoa_to_sheet(data);
+        
+        ws['!cols'] = [
+          { wch: 15 }, { wch: 30 }, { wch: 20 }, 
+          { wch: 30 }, { wch: 15 }, { wch: 15 }, { wch: 20 }
+        ];
+
+        const range = XLSX.utils.decode_range(ws['!ref']);
+        for (let C = range.s.c; C <= range.e.c; ++C) {
+          const address = XLSX.utils.encode_col(C) + "1";
+          if (!ws[address]) continue;
+          ws[address].s = {
+            font: { bold: true, color: { rgb: "FFFFFF" } },
+            fill: { fgColor: { rgb: "4472C4" }, patternType: "solid" },
+            alignment: { horizontal: "center", vertical: "center" }
+          };
+        }
+
+        XLSX.utils.book_append_sheet(wb, ws, "Teachers");
+        XLSX.writeFile(wb, "template_import_guru.xlsx");
+        
+        downloadTemplateBtn.textContent = "✅ Template diunduh";
+        setTimeout(() => {
+          downloadTemplateBtn.textContent = "️ Download Template Excel Guru";
+        }, 2000);
+        
+      } catch (error) {
+        console.error("Generate template error:", error);
+        alert("❌ Gagal membuat template: " + error.message);
+        downloadTemplateBtn.textContent = "⬇️ Download Template Excel Guru";
+      }
+    });
+  }
+
+  // 2. Fitur Upload File
+  uploadBtn.addEventListener("click", async () => {
     try {
+      const file = excelFile.files[0];
+      const currentAdminKey = localStorage.getItem("simAdminKey") || "";
+
+      if (!currentAdminKey) {
+        importResult.innerHTML = `<p class="text-red-600 font-bold">❌ Anda harus login sebagai admin!</p>`;
+        return;
+      }
+
+      if (!file) {
+        importResult.innerHTML = `<p class="text-red-600 font-bold">Silakan pilih file Excel terlebih dahulu.</p>`;
+        return;
+      }
+
+      uploadBtn.disabled = true;
+      uploadBtn.textContent = "⏳ Mengupload...";
+
+      const formData = new FormData();
+      formData.append("file", file);
+
       const response = await fetch(`${API_URL}/api/import/teachers`, {
         method: "POST",
-        headers: {
-          "x-admin-key": localStorage.getItem("simAdminKey"),
-        },
-        body: formData,
+        headers: { "x-admin-key": currentAdminKey },
+        body: formData
       });
 
-      const data = await response.json();
-      setResult(data);
-      
-      if (data.success) {
-        alert(`Import berhasil!\nTotal: ${data.total}\nBerhasil: ${data.inserted}\nDilewati: ${data.skipped}`);
-      } else {
-        alert(`Import gagal: ${data.message}`);
+      const result = await response.json();
+      console.log("IMPORT GURU RESULT:", result);
+
+      if (!result.success) {
+        importResult.innerHTML = `
+          <p class="text-red-600 font-bold mb-2">❌ ${result.message || "Import gagal."}</p>
+          ${result.errors ? `
+            <details class="mt-2">
+              <summary class="cursor-pointer text-sm text-red-600">Lihat detail error (${result.errors.length})</summary>
+              <ul class="mt-2 bg-red-50 p-3 rounded text-sm text-red-700 max-h-40 overflow-y-auto">
+                ${result.errors.map(err => `<li>Baris ${err.row}: ${err.message}</li>`).join('')}
+              </ul>
+            </details>
+          ` : `<pre class="mt-2 bg-gray-100 p-2 rounded text-xs overflow-auto">${JSON.stringify(result, null, 2)}</pre>`}
+        `;
+        return;
       }
+
+      importResult.innerHTML = `
+        <p class="text-green-600 font-bold mb-2">✅ Import berhasil!</p>
+        <ul class="text-sm space-y-1">
+          <li>Total data diproses: <b>${result.total}</b></li>
+          <li>Berhasil dimasukkan/diupdate: <b>${result.inserted}</b></li>
+          <li>Dilewati (error): <b>${result.skipped}</b></li>
+        </ul>
+      `;
+      
+      excelFile.value = "";
+
     } catch (error) {
-      alert(`Error: ${error.message}`);
+      console.error("IMPORT GURU UI ERROR:", error);
+      importResult.innerHTML = `<p class="text-red-600 font-bold">Gagal koneksi ke server.</p>`;
     } finally {
-      setLoading(false);
+      uploadBtn.disabled = false;
+      uploadBtn.textContent = "Upload Excel";
     }
-  };
-
-  return (
-    <div className="p-6">
-      <h1 className="text-2xl font-bold mb-2">Import Data Guru</h1>
-      <p className="text-gray-600 mb-6">
-        Upload file Excel untuk memasukkan data guru ke MySQL.
-      </p>
-
-      <div className="bg-white rounded-lg shadow p-6">
-        <div className="mb-4">
-          <label className="block text-sm font-medium mb-2">
-            Pilih file Excel
-          </label>
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={handleFileChange}
-            className="block w-full text-sm text-gray-500
-              file:mr-4 file:py-2 file:px-4
-              file:rounded file:border-0
-              file:text-sm file:font-semibold
-              file:bg-blue-50 file:text-blue-700
-              hover:file:bg-blue-100"
-          />
-        </div>
-
-        <button
-          onClick={handleUpload}
-          disabled={loading || !file}
-          className="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {loading ? "Mengupload..." : "Upload Excel"}
-        </button>
-
-        {result && (
-          <div className={`mt-4 p-4 rounded ${
-            result.success ? "bg-green-50" : "bg-red-50"
-          }`}>
-            <h3 className="font-bold mb-2">
-              {result.success ? "✅ Import Berhasil" : "❌ Import Gagal"}
-            </h3>
-            <p>Total data: {result.total}</p>
-            <p>Berhasil: {result.inserted}</p>
-            <p>Dilewati: {result.skipped}</p>
-            {result.errors && result.errors.length > 0 && (
-              <div className="mt-2">
-                <p className="font-semibold">Error:</p>
-                <ul className="list-disc list-inside text-sm">
-                  {result.errors.map((err, idx) => (
-                    <li key={idx}>
-                      Baris {err.row}: {err.message}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        )}
-
-        <div className="mt-6 p-4 bg-blue-50 rounded">
-          <h4 className="font-bold mb-2">Format Excel:</h4>
-          <ul className="text-sm list-disc list-inside">
-            <li>Kolom wajib: <b>teacher_id</b>, <b>teacher_name</b></li>
-            <li>Salah satu harus ada: <b>nip</b> atau <b>email</b> (untuk username)</li>
-            <li>Kolom opsional: phone, status_active, roles</li>
-            <li>Roles dipisah koma (contoh: guru,wali_kelas)</li>
-            <li>Password default: default12345</li>
-          </ul>
-        </div>
-      </div>
-    </div>
-  );
+  });
 }
-app.get("/api/templates/teachers", verifyAdminApiKey, (req, res) => {
-  const XLSX = require("xlsx");
-  
-  const data = [
-    {
-      teacher_id: "TCH-2026-0005",
-      teacher_name: "Ahmad Sudirman",
-      nip: "198501012010011001",
-      phone: "081234567890",
-      email: "ahmad@madrasah.sch.id",
-      status_active: "aktif",
-      roles: "guru,wali_kelas",
-    },
-    {
-      teacher_id: "TCH-2026-0006",
-      teacher_name: "Siti Nurhaliza",
-      nip: "198602022011012002",
-      phone: "081234567891",
-      email: "siti@madrasah.sch.id",
-      status_active: "aktif",
-      roles: "guru,bk",
-    },
-  ];
 
-  const ws = XLSX.utils.json_to_sheet(data);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Guru");
-
-  const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
-  
-  res.setHeader(
-    "Content-Type",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-  );
-  res.setHeader(
-    "Content-Disposition",
-    "attachment; filename=template_import_guru.xlsx"
-  );
-  res.send(buffer);
-});
-export default ImportGuruPage;
+export { initImportGuruPage };

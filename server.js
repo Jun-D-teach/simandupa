@@ -2158,6 +2158,72 @@ app.post(
     }
   }
 );
+// Di server.js - tambahkan endpoint ini
+
+// Download template Excel untuk import guru
+app.get("/api/templates/teachers", async (req, res) => {
+  try {
+    // Optional: cek admin key (sesuaikan dengan cara Anda)
+    const adminKey = req.headers["x-admin-key"];
+    if (!adminKey || adminKey !== process.env.ADMIN_KEY) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+
+    const ExcelJS = require("exceljs");
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Teachers");
+
+    // Definisi kolom
+    worksheet.columns = [
+      { header: "teacher_id", key: "teacher_id", width: 15 },
+      { header: "teacher_name", key: "teacher_name", width: 30 },
+      { header: "nip", key: "nip", width: 20 },
+      { header: "email", key: "email", width: 30 },
+      { header: "phone", key: "phone", width: 15 },
+      { header: "status_active", key: "status_active", width: 15 },
+      { header: "roles", key: "roles", width: 20 }
+    ];
+
+    // Style header
+    worksheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    worksheet.getRow(1).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF4472C4" }
+    };
+
+    // Tambahkan contoh data
+    worksheet.addRow({
+      teacher_id: "GURU001",
+      teacher_name: "Contoh Nama Guru",
+      nip: "199001012020011001",
+      email: "guru@man2palembang.sch.id",
+      phone: "08123456789",
+      status_active: "1",
+      roles: "guru,wali_kelas"
+    });
+
+    // Tambahkan baris kosong untuk diisi user
+    for (let i = 0; i < 10; i++) {
+      worksheet.addRow({});
+    }
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      "attachment; filename=template_import_guru.xlsx"
+    );
+    res.send(buffer);
+  } catch (error) {
+    console.error("Generate template guru error:", error);
+    res.status(500).json({ success: false, message: "Gagal membuat template" });
+  }
+});
 app.get("/api/classes", verifyAdminApiKey, async (req, res) => {
   try {
     const [rows] = await pool.query(
