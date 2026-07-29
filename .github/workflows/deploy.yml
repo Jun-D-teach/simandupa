@@ -1,9 +1,8 @@
-name: Deploy to Hostinger
+name: Deploy SIMANDUPA to Hostinger
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -19,29 +18,12 @@ jobs:
         with:
           node-version: '20'
           
-      # STEP 1: Install root dependencies
-      - name: Install root dependencies
+      - name: Install dependencies
         run: npm install
         
-      # STEP 2: Install backend dependencies
-      - name: Install backend dependencies
-        run: |
-          cd backend
-          npm install
-          
-      # STEP 3: Install sim-web dependencies (INI YANG PENTING!)
-      - name: Install sim-web dependencies
-        run: |
-          cd sim-web
-          npm install
-          
-      # STEP 4: Build frontend
       - name: Build frontend
-        run: |
-          cd sim-web
-          npm run build
-          
-      # STEP 5: Deploy to Hostinger
+        run: npm run build
+        
       - name: Deploy to Hostinger via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.4
         with:
@@ -54,13 +36,12 @@ jobs:
             **/.git*
             **/.git*/**
             **/node_modules/**
-            **/sim-web/src/**
-            **/sim-web/public/**
-            **/sim-web/vite.config.js
-            **/sim-web/package-lock.json
-            **/backend/package-lock.json
-            **/package-lock.json
+            **/src/**
             **/*.md
             **/.env
-            **/tests/**
+            **/.env.local
+            **/package-lock.json
             **/.github/**
+            
+      - name: Deployment complete
+        run: echo "✅ Deployed to simandupa.man2plg.sch.id"
