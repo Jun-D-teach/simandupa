@@ -127,9 +127,12 @@ function formatAttendanceId(dateObj, studentId) {
   const year = dateObj.getFullYear();
   const month = String(dateObj.getMonth() + 1).padStart(2, "0");
   const day = String(dateObj.getDate()).padStart(2, "0");
-  return `${year}${month}${day}_${studentId}`;
+  const hours = String(dateObj.getHours()).padStart(2, "0");
+  const minutes = String(dateObj.getMinutes()).padStart(2, "0");
+  const seconds = String(dateObj.getSeconds()).padStart(2, "0");
+  // Format: YYYYMMDD_studentId_HHMMSS (unik setiap detik)
+  return `${year}${month}${day}_${studentId}_${hours}${minutes}${seconds}`;
 }
-
 async function ensureSchema() {
   const requiredStatuses = [
     "hadir",
@@ -1333,14 +1336,12 @@ app.post("/api/attendance", async (req, res) => {
   try {
     const { student_id, scanner_id } = req.body;
     if (!student_id || !scanner_id)
-      return res
-        .status(400)
-        .json({ success: false, message: "Data tidak lengkap" });
+      return res.status(400).json({ success: false, message: "Data tidak lengkap" });
 
     connection = await pool.getConnection();
     await connection.beginTransaction();
 
-    // 1. Ambil Data Siswa & Pengaturan Jam Sekaligus
+    // 1. Ambil Data Siswa & Pengaturan Jam
     const [[student]] = await connection.query(
       "SELECT * FROM students WHERE student_id = ? LIMIT 1",
       [student_id],
@@ -1353,82 +1354,62 @@ app.post("/api/attendance", async (req, res) => {
     if (student.status_active !== "aktif")
       throw { status: 400, message: "Siswa tidak aktif" };
 
-const config = Object.fromEntries(
-  settingsRows.map((s) => [s.setting_key, s.setting_value]),
-);
-const now = getWIBDate(); // Gunakan waktu WIB
-const attendanceDate = formatDateToYmd(now);
-const attendanceTime = formatTimeToHms(now);
+    const config = Object.fromEntries(
+      settingsRows.map((s) => [s.setting_key, s.setting_value]),
+    );
+    const now = getWIBDate();
+    const attendanceDate = formatDateToYmd(now);
+    const attendanceTime = formatTimeToHms(now);
     const attendanceSeconds = parseTimeToSeconds(attendanceTime);
 
     const openSeconds = parseTimeToSeconds(config.attendance_open_time);
     const returnSeconds = parseTimeToSeconds(config.school_return_time);
-    const closeReturnSeconds = parseTimeToSeconds(
-      config.attendance_close_return_time,
-    );
+    const closeReturnSeconds = parseTimeToSeconds(config.attendance_close_return_time);
 
-    // 1b. Validasi window absensi (diatur dari UI Admin)
-    if (
-      attendanceSeconds !== null &&
-      openSeconds !== null &&
-      attendanceSeconds < openSeconds
-    ) {
+    // Validasi window absensi
+    if (attendanceSeconds !== null && openSeconds !== null && attendanceSeconds < openSeconds) {
       throw { status: 400, message: "Absensi belum dibuka" };
     }
-    if (
-      attendanceSeconds !== null &&
-      closeReturnSeconds !== null &&
-      attendanceSeconds > closeReturnSeconds
-    ) {
+    if (attendanceSeconds !== null && closeReturnSeconds !== null && attendanceSeconds > closeReturnSeconds) {
       throw { status: 400, message: "Absensi sudah ditutup" };
     }
 
-    // 2. Cek Duplikat
-    const [existing] = await connection.query(
-      "SELECT attendance_id FROM attendance WHERE student_id = ? AND attendance_date = ?",
-      [student_id, attendanceDate],
-    );
-    if (existing.length > 0)
-      throw { status: 409, message: "Siswa sudah absen hari ini" };
-
-    // 3. Logika Jam Dinamis (Ganti Hardcore)
-    let type = "masuk",
-      status = "hadir";
-    if (
-      attendanceSeconds !== null &&
-      returnSeconds !== null &&
-      attendanceSeconds >= returnSeconds
-    ) {
-      // window pulang sampai batas akhir absen pulang
-      if (
-        closeReturnSeconds !== null &&
-        attendanceSeconds > closeReturnSeconds
-      ) {
+    // 2. Tentukan Status (hadir/terlambat/pulang)
+    let type = "masuk", status = "hadir";
+    if (attendanceSeconds !== null && returnSeconds !== null && attendanceSeconds >= returnSeconds) {
+      if (closeReturnSeconds !== null && attendanceSeconds > closeReturnSeconds) {
         throw { status: 400, message: "Batas akhir absen pulang sudah lewat" };
       }
       type = "pulang";
       status = "pulang";
     } else {
-      status = getAttendanceStatus(
-        attendanceTime,
-        config.school_start_time,
-        config.school_late_time,
-      );
+      status = getAttendanceStatus(attendanceTime, config.school_start_time, config.school_late_time);
     }
 
+    // 3. ✅ CEK DUPLIKASI (SETELAH status didefinisikan)
+    const [existingSameStatus] = await connection.query(
+      "SELECT attendance_id FROM attendance WHERE student_id = ? AND attendance_date = ? AND status = ?",
+      [student_id, attendanceDate, status]
+    );
+
+    if (existingSameStatus.length > 0) {
+      throw { status: 409, message: `Siswa sudah absen dengan status '${status}' hari ini` };
+    }
+
+    const [todayAttendance] = await connection.query(
+      "SELECT COUNT(*) as count FROM attendance WHERE student_id = ? AND attendance_date = ?",
+      [student_id, attendanceDate]
+    );
+
+    if (todayAttendance[0].count >= 2) {
+      throw { status: 409, message: "Siswa sudah absen maksimal (hadir & pulang) hari ini" };
+    }
+
+    // 4. Simpan ke Database
     const attendanceId = formatAttendanceId(now, student_id);
     await connection.query(
       "INSERT INTO attendance (attendance_id, student_id, student_name, class_id, attendance_date, attendance_time, status, scanner_id, notification_sent) VALUES (?,?,?,?,?,?,?,?,0)",
-      [
-        attendanceId,
-        student.student_id,
-        student.student_name,
-        student.class_id,
-        attendanceDate,
-        attendanceTime,
-        status,
-        scanner_id,
-      ],
+      [attendanceId, student.student_id, student.student_name, student.class_id, attendanceDate, attendanceTime, status, scanner_id]
     );
 
     // 4. Notifikasi WhatsApp
@@ -1462,28 +1443,29 @@ const attendanceTime = formatTimeToHms(now);
     }
 
     await connection.commit();
-    res.json({
-      success: true,
-      message: "Absensi berhasil",
-      data: {
-        attendance_id: attendanceId,
-        student_name: student.student_name,
-        attendance_date: attendanceDate,
-        attendance_time: attendanceTime,
-        status,
-        scanner_id,
-        notification_sent: notificationSent,
-      },
-    });
-  } catch (error) {
-    if (connection) await connection.rollback();
-    res.status(error.status || 500).json({
-      success: false,
-      message: error.message || "Gagal menyimpan absensi",
-    });
-  } finally {
-    if (connection) connection.release();
+res.json({ 
+  success: true, 
+  message: "Absensi berhasil", 
+  data: {
+    attendance_id: attendanceId,
+    student_name: student.student_name,
+    class_id: student.class_id,
+    attendance_date: attendanceDate,
+    attendance_time: attendanceTime,
+    status: status,
+    scanner_id: scanner_id
   }
+});
+
+} catch (error) {
+  if (connection) await connection.rollback();
+  res.status(error.status || 500).json({ 
+    success: false, 
+    message: error.message || "Gagal menyimpan absensi" 
+  });
+} finally {
+  if (connection) connection.release();
+}
 });
 app.get("/api/admin-key", (req, res) => {
   res.json({ admin_key: process.env.ADMIN_API_KEY || "" });
@@ -2034,11 +2016,7 @@ app.post(
             continue;
           }
 
-          // Cek apakah guru sudah ada
-          const [existingTeacher] = await connection.query(
-            "SELECT teacher_id FROM teachers WHERE teacher_id = ? LIMIT 1",
-            [teacher_id]
-          );
+    
 
           if (existingTeacher.length > 0) {
             // Update guru yang sudah ada
