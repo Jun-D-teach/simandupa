@@ -21,3 +21,11 @@ Aplikasi manajemen madrasah terpadu untuk MAN 2 Palembang dengan fitur absensi Q
 - **Deployment**: Hostinger + GitHub Actions
 
 ## 📦 Struktur Proyek
+
+##  Konfigurasi WhatsApp (Fonnte)
+
+1. Daftar di https://fonnte.com
+2. Dapatkan token dari dashboard
+3. Tambahkan ke environment variables:
+   - Production: `FONNTE_TOKEN` di hosting panel
+   - Development: `FONNTE_TOKEN` di file `.env`

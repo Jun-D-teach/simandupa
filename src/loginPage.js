@@ -50,7 +50,7 @@ async function initLoginPage() {
       `;
 
       setTimeout(() => {
-        window.location.href = "/?page=dashboard";
+        window.location.href = "/?page=scanner";
       }, 800);
     } catch (error) {
       console.error("LOGIN UI ERROR:", error);
@@ -72,7 +72,7 @@ function logout() {
   localStorage.removeItem("simLogin");
   localStorage.removeItem("simUser");
   localStorage.removeItem("simAdminKey");
-  window.location.href = "/?page=login";
+  window.location.href = "/";
 }
 
 export { initLoginPage, isLoggedIn, logout };

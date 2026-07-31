@@ -13,10 +13,11 @@ import { initTeachersPage } from "./teachersPage";
 import { initTeacherLoginPage } from "./teacherLoginPage";
 import { initTeacherPortalPage } from "./teacherPortalPage";
 import { initImportGuruPage } from "./ImportGuruPage"; // Pastikan nama file sesuai
+import { getHomePage } from "./homePage";
 
 const params = new URLSearchParams(window.location.search);
 const SCANNER_ID = params.get("scanner") || "SCN-001";
-const PAGE = params.get("page") || "scanner";
+const PAGE = params.get("page") || "home";
 import { API_URL } from "./config";
 console.log("Mode halaman:", PAGE);
 console.log("Scanner aktif:", SCANNER_ID);
@@ -289,7 +290,9 @@ function renderPlaceholderPage(title, description) {
 }
 
 (async function initApp() {
-  if (PAGE === "login") {
+  if (PAGE === "home" || PAGE === "") {
+    document.querySelector("#app").innerHTML = getHomePage();
+  } else if (PAGE === "login") {
     document.querySelector("#app").innerHTML = `
       <div style="font-family: Arial; padding: 20px; background: #f5f6fa; min-height: 100vh;">
         <div style="max-width: 420px; margin: 40px auto; background: white; padding: 24px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
@@ -822,18 +825,23 @@ function renderPlaceholderPage(title, description) {
       initSidebarToggle();
       document.getElementById("logoutBtn")?.addEventListener("click", logout);
     }
-  } else {
+    } else if (PAGE === "scanner") {
+    // WAJIB LOGIN untuk akses scanner
+    if (!requireAuth()) {
+      return; 
+    }
+
     document.querySelector("#app").innerHTML = `
       <div style="font-family: Arial; padding: 20px; background: #f5f6fa; min-height: 100vh;">
         <div style="max-width: 900px; margin: auto;">
           <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
             <div>
-              <h1>SIM Madrasah</h1>
+              <h1>SIM Madrasah - Absensi</h1>
               <p><b>Scanner ID:</b> ${SCANNER_ID}</p>
             </div>
             <div style="display:flex; gap:10px; flex-wrap:wrap;">
-              ${isLoggedIn() ? `<a href="/?page=dashboard" style="text-decoration:none; padding:10px 14px; background:#7c3aed; color:white; border-radius:8px;">Admin Panel</a>` : ""}
-              ${!isLoggedIn() ? `<a href="/?page=login" style="text-decoration:none; padding:10px 14px; background:#111827; color:white; border-radius:8px;">Login</a>` : ""}
+              <a href="/?page=dashboard" style="text-decoration:none; padding:10px 14px; background:#7c3aed; color:white; border-radius:8px;">Admin Panel</a>
+              <button id="logoutBtn" style="padding:10px 14px; background:#ef4444; color:white; border:none; border-radius:8px; cursor:pointer;">Logout</button>
             </div>
           </div>
 
@@ -852,5 +860,12 @@ function renderPlaceholderPage(title, description) {
     `;
 
     initScanner(SCANNER_ID);
+    
+    // Tambahkan event listener logout
+    document.getElementById("logoutBtn")?.addEventListener("click", logout);
+
+  } else {
+    // Fallback: Jika halaman tidak dikenal, kembalikan ke home
+    document.querySelector("#app").innerHTML = getHomePage();
   }
 })();
