@@ -1382,28 +1382,46 @@ app.post("/api/attendance", async (req, res) => {
       }
       type = "pulang";
       status = "pulang";
+        // ✅ MODE PULANG: Cek apakah sudah absen masuk
+  const [checkMasuk] = await connection.query(
+    "SELECT attendance_id FROM attendance WHERE student_id = ? AND attendance_date = ? AND status IN ('hadir', 'terlambat', 'sangat terlambat')",
+    [student_id, attendanceDate]
+  );
+  
+  if (checkMasuk.length === 0) {
+    throw { status: 400, message: "Siswa belum absen masuk hari ini. Tidak bisa absen pulang." };
+  }
     } else {
       status = getAttendanceStatus(attendanceTime, config.school_start_time, config.school_late_time);
     }
 
     // 3. ✅ CEK DUPLIKASI (SETELAH status didefinisikan)
-    const [existingSameStatus] = await connection.query(
-      "SELECT attendance_id FROM attendance WHERE student_id = ? AND attendance_date = ? AND status = ?",
-      [student_id, attendanceDate, status]
-    );
+    // 3. ✅ CEK DUPLIKASI (SETELAH status didefinisikan)
 
-    if (existingSameStatus.length > 0) {
-      throw { status: 409, message: `Siswa sudah absen dengan status '${status}' hari ini` };
-    }
+// Cek apakah sudah absen dengan status yang sama
+const [existingSameStatus] = await connection.query(
+  "SELECT attendance_id FROM attendance WHERE student_id = ? AND attendance_date = ? AND status = ?",
+  [student_id, attendanceDate, status]
+);
+if (existingSameStatus.length > 0) {
+  throw { status: 409, message: `Siswa sudah absen dengan status '${status}' hari ini` };
+}
 
-    const [todayAttendance] = await connection.query(
-      "SELECT COUNT(*) as count FROM attendance WHERE student_id = ? AND attendance_date = ?",
-      [student_id, attendanceDate]
-    );
+// Cek total absen hari ini
+const [todayAttendance] = await connection.query(
+  "SELECT COUNT(*) as count FROM attendance WHERE student_id = ? AND attendance_date = ?",
+  [student_id, attendanceDate]
+);
 
-    if (todayAttendance[0].count >= 2) {
-      throw { status: 409, message: "Siswa sudah absen maksimal (hadir & pulang) hari ini" };
-    }
+// LOGIKA BARU: Sebelum jam pulang, hanya boleh 1x absen (hadir/terlambat/sangat terlambat)
+if (type === "masuk" && todayAttendance[0].count >= 1) {
+  throw { status: 409, message: "Siswa sudah absen masuk hari ini. Tunggu sampai jam pulang untuk absen pulang." };
+}
+
+// Setelah jam pulang, maksimal 2x absen (1x masuk + 1x pulang)
+if (todayAttendance[0].count >= 2) {
+  throw { status: 409, message: "Siswa sudah absen maksimal (hadir & pulang) hari ini" };
+}
 
     // 4. Simpan ke Database
     const attendanceId = formatAttendanceId(now, student_id);
