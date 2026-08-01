@@ -25,7 +25,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 // PENTING: Cari folder dist frontend
 function resolveClientDistPath() {
   const candidates = [
-    path.join(__dirname, "dist"),  // Path baru
+    path.join(__dirname, "dist"), // Path baru
     path.join(__dirname, "public"),
     path.join(__dirname, "client"),
   ];
@@ -37,7 +37,9 @@ function resolveClientDistPath() {
     }
   }
 
-  console.log("⚠ Frontend tidak ditemukan. Jalankan 'npm run build' terlebih dahulu.");
+  console.log(
+    "⚠ Frontend tidak ditemukan. Jalankan 'npm run build' terlebih dahulu.",
+  );
   return candidates[0];
 }
 
@@ -174,7 +176,7 @@ async function ensureSchema() {
 }
 
 async function markAbsentStudentsAndNotify(nowArg) {
-const now = getWIBDate(nowArg || new Date());
+  const now = getWIBDate(nowArg || new Date());
   const attendanceDate = formatDateToYmd(now);
   const attendanceTime = formatTimeToHms(now);
 
@@ -270,11 +272,13 @@ async function absentSchedulerTick() {
     const [rows] = await pool.query(
       "SELECT setting_value FROM settings WHERE setting_key = 'absent_notify_time' LIMIT 1",
     );
-    const configured = rows.length ? String(rows[0].setting_value || "").trim() : "";
+    const configured = rows.length
+      ? String(rows[0].setting_value || "").trim()
+      : "";
     if (!configured) return;
 
     const target = configured.slice(0, 5);
-   const now = getWIBDate(new Date());
+    const now = getWIBDate(new Date());
     const current = `${String(now.getHours()).padStart(2, "0")}:${String(
       now.getMinutes(),
     ).padStart(2, "0")}`;
@@ -312,13 +316,12 @@ function excelDateToFormatted(value) {
 // ==========================================
 function getWIBDate(dateObj = new Date()) {
   // WIB = UTC+7
-  const utc = dateObj.getTime() + (dateObj.getTimezoneOffset() * 60000);
-  const wibTime = new Date(utc + (3600000 * 7));
+  const utc = dateObj.getTime() + dateObj.getTimezoneOffset() * 60000;
+  const wibTime = new Date(utc + 3600000 * 7);
   return wibTime;
 }
 
 function verifyAdminApiKey(req, res, next) {
-
   const apiKey = req.headers["x-admin-key"];
 
   if (!apiKey) {
@@ -1336,7 +1339,9 @@ app.post("/api/attendance", async (req, res) => {
   try {
     const { student_id, scanner_id } = req.body;
     if (!student_id || !scanner_id)
-      return res.status(400).json({ success: false, message: "Data tidak lengkap" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Data tidak lengkap" });
 
     connection = await pool.getConnection();
     await connection.beginTransaction();
@@ -1364,70 +1369,89 @@ app.post("/api/attendance", async (req, res) => {
 
     const openSeconds = parseTimeToSeconds(config.attendance_open_time);
     const returnSeconds = parseTimeToSeconds(config.school_return_time);
-    const closeReturnSeconds = parseTimeToSeconds(config.attendance_close_return_time);
+    const closeReturnSeconds = parseTimeToSeconds(
+      config.attendance_close_return_time,
+    );
 
     // Validasi window absensi
-    if (attendanceSeconds !== null && openSeconds !== null && attendanceSeconds < openSeconds) {
+    if (
+      attendanceSeconds !== null &&
+      openSeconds !== null &&
+      attendanceSeconds < openSeconds
+    ) {
       throw { status: 400, message: "Absensi belum dibuka" };
     }
-    if (attendanceSeconds !== null && closeReturnSeconds !== null && attendanceSeconds > closeReturnSeconds) {
+    if (
+      attendanceSeconds !== null &&
+      closeReturnSeconds !== null &&
+      attendanceSeconds > closeReturnSeconds
+    ) {
       throw { status: 400, message: "Absensi sudah ditutup" };
     }
 
     // 2. Tentukan Status (hadir/terlambat/pulang)
-    let type = "masuk", status = "hadir";
-    if (attendanceSeconds !== null && returnSeconds !== null && attendanceSeconds >= returnSeconds) {
-      if (closeReturnSeconds !== null && attendanceSeconds > closeReturnSeconds) {
+    let type = "masuk",
+      status = "hadir";
+    if (
+      attendanceSeconds !== null &&
+      returnSeconds !== null &&
+      attendanceSeconds >= returnSeconds
+    ) {
+      if (
+        closeReturnSeconds !== null &&
+        attendanceSeconds > closeReturnSeconds
+      ) {
         throw { status: 400, message: "Batas akhir absen pulang sudah lewat" };
       }
       type = "pulang";
       status = "pulang";
-        // ✅ MODE PULANG: Cek apakah sudah absen masuk
-  const [checkMasuk] = await connection.query(
-    "SELECT attendance_id FROM attendance WHERE student_id = ? AND attendance_date = ? AND status IN ('hadir', 'terlambat', 'sangat terlambat')",
-    [student_id, attendanceDate]
-  );
-  
-  if (checkMasuk.length === 0) {
-    throw { status: 400, message: "Siswa belum absen masuk hari ini. Tidak bisa absen pulang." };
-  }
     } else {
-      status = getAttendanceStatus(attendanceTime, config.school_start_time, config.school_late_time);
+      status = getAttendanceStatus(
+        attendanceTime,
+        config.school_start_time,
+        config.school_late_time,
+      );
     }
 
     // 3. ✅ CEK DUPLIKASI (SETELAH status didefinisikan)
-    // 3. ✅ CEK DUPLIKASI (SETELAH status didefinisikan)
+    const [existingSameStatus] = await connection.query(
+      "SELECT attendance_id FROM attendance WHERE student_id = ? AND attendance_date = ? AND status = ?",
+      [student_id, attendanceDate, status],
+    );
 
-// Cek apakah sudah absen dengan status yang sama
-const [existingSameStatus] = await connection.query(
-  "SELECT attendance_id FROM attendance WHERE student_id = ? AND attendance_date = ? AND status = ?",
-  [student_id, attendanceDate, status]
-);
-if (existingSameStatus.length > 0) {
-  throw { status: 409, message: `Siswa sudah absen dengan status '${status}' hari ini` };
-}
+    if (existingSameStatus.length > 0) {
+      throw {
+        status: 409,
+        message: `Siswa sudah absen dengan status '${status}' hari ini`,
+      };
+    }
 
-// Cek total absen hari ini
-const [todayAttendance] = await connection.query(
-  "SELECT COUNT(*) as count FROM attendance WHERE student_id = ? AND attendance_date = ?",
-  [student_id, attendanceDate]
-);
+    const [todayAttendance] = await connection.query(
+      "SELECT COUNT(*) as count FROM attendance WHERE student_id = ? AND attendance_date = ?",
+      [student_id, attendanceDate],
+    );
 
-// LOGIKA BARU: Sebelum jam pulang, hanya boleh 1x absen (hadir/terlambat/sangat terlambat)
-if (type === "masuk" && todayAttendance[0].count >= 1) {
-  throw { status: 409, message: "Siswa sudah absen masuk hari ini. Tunggu sampai jam pulang untuk absen pulang." };
-}
-
-// Setelah jam pulang, maksimal 2x absen (1x masuk + 1x pulang)
-if (todayAttendance[0].count >= 2) {
-  throw { status: 409, message: "Siswa sudah absen maksimal (hadir & pulang) hari ini" };
-}
+    if (todayAttendance[0].count >= 2) {
+      throw {
+        status: 409,
+        message: "Siswa sudah absen maksimal (hadir & pulang) hari ini",
+      };
+    }
 
     // 4. Simpan ke Database
     const attendanceId = formatAttendanceId(now, student_id);
     await connection.query(
       "INSERT INTO attendance (attendance_id, student_id, student_name, class_id, attendance_date, attendance_time, status, scanner_id, notification_sent) VALUES (?,?,?,?,?,?,?,?,0)",
-      [attendanceId, student.student_id, student.student_name, student.class_id, attendanceDate, attendanceTime, status, scanner_id]
+      [
+        attendanceId,
+        student.student_id,
+        student.student_name,
+        student.class_id,
+        attendanceDate,
+        attendanceTime,
+        status,
+        scanner_id,
+      ],
     );
 
     // 4. Notifikasi WhatsApp
@@ -1461,29 +1485,28 @@ if (todayAttendance[0].count >= 2) {
     }
 
     await connection.commit();
-res.json({ 
-  success: true, 
-  message: "Absensi berhasil", 
-  data: {
-    attendance_id: attendanceId,
-    student_name: student.student_name,
-    class_id: student.class_id,
-    attendance_date: attendanceDate,
-    attendance_time: attendanceTime,
-    status: status,
-    scanner_id: scanner_id
+    res.json({
+      success: true,
+      message: "Absensi berhasil",
+      data: {
+        attendance_id: attendanceId,
+        student_name: student.student_name,
+        class_id: student.class_id,
+        attendance_date: attendanceDate,
+        attendance_time: attendanceTime,
+        status: status,
+        scanner_id: scanner_id,
+      },
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Gagal menyimpan absensi",
+    });
+  } finally {
+    if (connection) connection.release();
   }
-});
-
-} catch (error) {
-  if (connection) await connection.rollback();
-  res.status(error.status || 500).json({ 
-    success: false, 
-    message: error.message || "Gagal menyimpan absensi" 
-  });
-} finally {
-  if (connection) connection.release();
-}
 });
 app.get("/api/admin-key", (req, res) => {
   res.json({ admin_key: process.env.ADMIN_API_KEY || "" });
@@ -1755,48 +1778,43 @@ app.get("/api/student/:studentId/attendance", async (req, res) => {
 app.get("/api/dashboard", verifyAdminApiKey, async (req, res) => {
   try {
     const { date, classId, status } = req.query;
-
     const conditions = [];
     const values = [];
-
     if (date) {
-      conditions.push("attendance_date = ?");
+      conditions.push("a.attendance_date = ?");
       values.push(date);
     }
-
     if (classId) {
-      conditions.push("class_id = ?");
+      conditions.push("a.class_id = ?");
       values.push(classId);
     }
-
     if (status) {
-      conditions.push("status = ?");
+      conditions.push("a.status = ?");
       values.push(status);
     }
-
     const whereClause =
       conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-
     const [rows] = await pool.query(
       `
         SELECT
-          attendance_id,
-          student_id,
-          student_name,
-          class_id,
-          attendance_date,
-          attendance_time,
-          status,
-          scanner_id,
-          notification_sent,
-          created_at
-        FROM attendance
+          a.attendance_id,
+          a.student_id,
+          a.student_name,
+          a.class_id,
+          a.attendance_date,
+          a.attendance_time,
+          a.status,
+          a.scanner_id,
+          a.notification_sent,
+          a.created_at,
+          t.teacher_name AS scanner_name
+        FROM attendance a
+        LEFT JOIN teachers t ON t.teacher_id = a.scanner_id
         ${whereClause}
-        ORDER BY attendance_date DESC, attendance_time DESC
+        ORDER BY a.attendance_date DESC, a.attendance_time DESC
         `,
       values,
     );
-
     const summary = {
       total: rows.length,
       hadir: rows.filter((item) => item.status === "hadir").length,
@@ -1805,7 +1823,6 @@ app.get("/api/dashboard", verifyAdminApiKey, async (req, res) => {
         (item) => item.status === "sangat terlambat",
       ).length,
     };
-
     res.json({
       success: true,
       summary,
@@ -2034,8 +2051,6 @@ app.post(
             continue;
           }
 
-    
-
           if (existingTeacher.length > 0) {
             // Update guru yang sudah ada
             const defaultPassword = "default12345";
@@ -2064,13 +2079,13 @@ app.post(
                 status_active || "aktif",
                 hashedPassword,
                 teacher_id,
-              ]
+              ],
             );
 
             // Update roles
             await connection.query(
               "DELETE FROM teacher_roles WHERE teacher_id = ?",
-              [teacher_id]
+              [teacher_id],
             );
           } else {
             // Insert guru baru
@@ -2099,7 +2114,7 @@ app.post(
                 username,
                 hashedPassword,
                 status_active || "aktif",
-              ]
+              ],
             );
           }
 
@@ -2116,7 +2131,7 @@ app.post(
               VALUES (?, ?)
               ON DUPLICATE KEY UPDATE role = VALUES(role)
               `,
-              [teacher_id, role]
+              [teacher_id, role],
             );
           }
 
@@ -2152,7 +2167,7 @@ app.post(
     } finally {
       if (connection) connection.release();
     }
-  }
+  },
 );
 // Di server.js - tambahkan endpoint ini
 
@@ -2177,7 +2192,7 @@ app.get("/api/templates/teachers", async (req, res) => {
       { header: "email", key: "email", width: 30 },
       { header: "phone", key: "phone", width: 15 },
       { header: "status_active", key: "status_active", width: 15 },
-      { header: "roles", key: "roles", width: 20 }
+      { header: "roles", key: "roles", width: 20 },
     ];
 
     // Style header
@@ -2185,7 +2200,7 @@ app.get("/api/templates/teachers", async (req, res) => {
     worksheet.getRow(1).fill = {
       type: "pattern",
       pattern: "solid",
-      fgColor: { argb: "FF4472C4" }
+      fgColor: { argb: "FF4472C4" },
     };
 
     // Tambahkan contoh data
@@ -2196,7 +2211,7 @@ app.get("/api/templates/teachers", async (req, res) => {
       email: "guru@man2palembang.sch.id",
       phone: "08123456789",
       status_active: "1",
-      roles: "guru,wali_kelas"
+      roles: "guru,wali_kelas",
     });
 
     // Tambahkan baris kosong untuk diisi user
@@ -2205,14 +2220,14 @@ app.get("/api/templates/teachers", async (req, res) => {
     }
 
     const buffer = await workbook.xlsx.writeBuffer();
-    
+
     res.setHeader(
       "Content-Type",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     );
     res.setHeader(
       "Content-Disposition",
-      "attachment; filename=template_import_guru.xlsx"
+      "attachment; filename=template_import_guru.xlsx",
     );
     res.send(buffer);
   } catch (error) {
@@ -4328,8 +4343,8 @@ app.get("/api/export/homeroom-time-report", async (req, res) => {
   }
 });
 
-app.use(express.static(path.join(__dirname, 'dist')));
-const db = require('./db');
+app.use(express.static(path.join(__dirname, "dist")));
+const db = require("./db");
 app.get("*", (req, res) => {
   if (req.path.startsWith("/api")) {
     return res.status(404).json({

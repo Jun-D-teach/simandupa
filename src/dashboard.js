@@ -3,7 +3,7 @@ import { API_URL } from "./config";
 function getAdminHeaders() {
   const adminKey = localStorage.getItem("simAdminKey") || "";
   return {
-    "x-admin-key": adminKey
+    "x-admin-key": adminKey,
   };
 }
 
@@ -15,9 +15,12 @@ async function loadDashboard(filters = {}) {
     if (filters.classId) params.append("classId", filters.classId);
     if (filters.status) params.append("status", filters.status);
 
-    const response = await fetch(`${API_URL}/api/dashboard?${params.toString()}`, {
-      headers: getAdminHeaders()
-    });
+    const response = await fetch(
+      `${API_URL}/api/dashboard?${params.toString()}`,
+      {
+        headers: getAdminHeaders(),
+      },
+    );
 
     const result = await response.json();
 
@@ -56,7 +59,7 @@ async function loadDashboard(filters = {}) {
           <td>${item.attendance_date}</td>
           <td>${item.attendance_time}</td>
           <td>${item.status}</td>
-          <td>${item.scanner_id}</td>
+          <td>${item.scanner_name || item.scanner_id}</td>
         </tr>
       `;
     });
@@ -74,7 +77,7 @@ async function loadDashboard(filters = {}) {
 async function loadClassOptions() {
   try {
     const response = await fetch(`${API_URL}/api/classes`, {
-      headers: getAdminHeaders()
+      headers: getAdminHeaders(),
     });
 
     const result = await response.json();
