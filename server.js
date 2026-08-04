@@ -187,16 +187,17 @@ async function markAbsentStudentsAndNotify(nowArg) {
   try {
     connection = await pool.getConnection();
 
-    const [students] = await connection.query(
+   const [students] = await connection.query(
       `SELECT s.*
-         FROM students s
-        WHERE s.status_active = 'aktif'
-          AND NOT EXISTS (
-            SELECT 1 FROM attendance a
-             WHERE a.student_id = s.student_id
-               AND a.attendance_date = ?
-          )`,
-      [attendanceDate],
+       FROM students s
+       WHERE s.status_active = 'aktif'
+       AND DATE(s.created_at) < ? 
+       AND NOT EXISTS (
+         SELECT 1 FROM attendance a
+         WHERE a.student_id = s.student_id
+         AND a.attendance_date = ?
+       )`,
+      [attendanceDate, attendanceDate], // Parameter 1: untuk created_at, Parameter 2: untuk attendance_date
     );
 
     for (const student of students) {
@@ -250,10 +251,7 @@ async function markAbsentStudentsAndNotify(nowArg) {
         processed += 1;
       } catch (err) {
         await connection.rollback();
-        console.error(
-          `ABSENT NOTIFY ERROR (${student.student_id}):`,
-          err.message,
-        );
+        console.error(`ABSENT NOTIFY ERROR (${student.student_id}):`, err.message);
       }
     }
   } catch (error) {
@@ -284,11 +282,11 @@ async function absentSchedulerTick() {
     ).padStart(2, "0")}`;
     const today = formatDateToYmd(now);
 
-    if (current === target && lastAbsentRunDate !== today) {
+    if (current >= target && lastAbsentRunDate !== today) {
       lastAbsentRunDate = today;
       const result = await markAbsentStudentsAndNotify(now);
       console.log(
-        `Absent notify dijalankan (${today}): ${result.processed} ditandai tidak hadir, ${result.notified} WA terkirim`,
+         `✅ Absent notify dijalankan (${today} pukul ${current} WIB): ${result.processed} siswa ditandai tidak hadir, ${result.notified} WA terkirim`,
       );
     }
   } catch (error) {
@@ -1390,8 +1388,16 @@ app.post("/api/attendance", async (req, res) => {
     }
 
     // 2. Tentukan Status (hadir/terlambat/pulang)
-    let type = "masuk",
-      status = "hadir";
+    let type = "masuk", status = "hadir";
+      const lateSeconds = parseTimeToSeconds(config.school_late_time);
+
+// ✅ VALIDASI BARU: Blokir absen masuk jika waktu scan > batas terlambat
+if (type === "masuk" && lateSeconds !== null && attendanceSeconds > lateSeconds) {
+  throw { 
+    status: 400, 
+    message: "Batas waktu absen masuk telah lewat. Anda tidak dapat melakukan absen masuk lagi." 
+  };
+}
     if (
       attendanceSeconds !== null &&
       returnSeconds !== null &&
@@ -4363,7 +4369,8 @@ app.get("*", (req, res) => {
     }
   });
 });
-
+setInterval(absentSchedulerTick, 60000);
+absentSchedulerTick();
 app.listen(PORT, "0.0.0.0", async () => {
   const frontendReady = fs.existsSync(path.join(clientDistPath, "index.html"));
   console.log(`Server running on port ${PORT}`);
