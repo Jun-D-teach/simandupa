@@ -180,12 +180,100 @@ async function ensureSchema() {
   );
 }
 
-//disini tempay coding wa otomatis jika tidak absen masuk, cari di kopian server js
-// async function markAbsentStudentsAndNotify(nowArg) {
+async function markAbsentStudentsAndNotify(nowArg) {
+  const now = getWIBDate(nowArg || new Date());
+  const attendanceDate = formatDateToYmd(now);
+  const attendanceTime = formatTimeToHms(now);
+
+  let connection;
+  let processed = 0;
+  let notified = 0;
+
+  try {
+    connection = await pool.getConnection();
+
+   const [students] = await connection.query(
+      `SELECT s.*
+       FROM students s
+       WHERE s.status_active = 'aktif'
+       AND DATE(s.created_at) < ? 
+       AND NOT EXISTS (
+         SELECT 1 FROM attendance a
+         WHERE a.student_id = s.student_id
+         AND a.attendance_date = ?
+       )`,
+      [attendanceDate, attendanceDate], // Parameter 1: untuk created_at, Parameter 2: untuk attendance_date
+    );
+
+    for (const student of students) {
+      const attendanceId = formatAttendanceId(now, student.student_id);
+      try {
+        await connection.beginTransaction();
+
+        await connection.query(
+          "INSERT INTO attendance (attendance_id, student_id, student_name, class_id, attendance_date, attendance_time, status, scanner_id, notification_sent) VALUES (?,?,?,?,?,?,?,?,0)",
+          [
+            attendanceId,
+            student.student_id,
+            student.student_name,
+            student.class_id,
+            attendanceDate,
+            attendanceTime,
+            "tidak hadir",
+            "SYSTEM",
+          ],
+        );
+
+        if (student.parent_phone) {
+          const message = `Ananda ${student.student_name} (${student.class_id}) telah absen ${type} pada ${attendanceTime}. Status: ${status}.`;
+        }
+
+        await connection.commit();
+        processed += 1;
+      } catch (err) {
+        await connection.rollback();
+        console.error(`ABSENT NOTIFY ERROR (${student.student_id}):`, err.message);
+      }
+    }
+  } catch (error) {
+    console.error("MARK ABSENT ERROR:", error.message);
+    throw error;
+  } finally {
+    if (connection) connection.release();
+  }
+
+  return { processed, notified };
+}
 
 let lastAbsentRunDate = null;
-//disini tempay coding wa otomatis jika tidak absen masuk, cari di kopian server js
-//async function absentSchedulerTick() {
+async function absentSchedulerTick() {
+  try {
+    const [rows] = await pool.query(
+      "SELECT setting_value FROM settings WHERE setting_key = 'absent_notify_time' LIMIT 1",
+    );
+    const configured = rows.length
+      ? String(rows[0].setting_value || "").trim()
+      : "";
+    if (!configured) return;
+
+    const target = configured.slice(0, 5);
+    const now = getWIBDate(new Date());
+    const current = `${String(now.getHours()).padStart(2, "0")}:${String(
+      now.getMinutes(),
+    ).padStart(2, "0")}`;
+    const today = formatDateToYmd(now);
+
+    if (current >= target && lastAbsentRunDate !== today) {
+      lastAbsentRunDate = today;
+      const result = await markAbsentStudentsAndNotify(now);
+      console.log(
+         `✅ Absent notify dijalankan (${today} pukul ${current} WIB): ${result.processed} siswa ditandai tidak hadir, ${result.notified} WA terkirim`,
+      );
+    }
+  } catch (error) {
+    console.error("ABSENT SCHEDULER ERROR:", error.message);
+  }
+}
 
 function excelDateToFormatted(value) {
   if (value === undefined || value === null || value === "") {
@@ -4206,10 +4294,8 @@ app.get("*", (req, res) => {
     }
   });
 });
-// ✅ WA OTOMATIS DINONAKTIFKAN
-// setInterval(absentSchedulerTick, 60000);
-// absentSchedulerTick();
-console.log("⚠️ WA otomatis ke ortu dinonaktifkan");
+setInterval(absentSchedulerTick, 60000);
+absentSchedulerTick();
 setInterval(processWAQueue, 3000); // Jalankan setiap 3 detik
 console.log("✅ WA Queue Worker aktif");
 app.listen(PORT, "0.0.0.0", async () => {
