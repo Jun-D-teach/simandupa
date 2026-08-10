@@ -134,7 +134,7 @@ function initScanner(scannerId) {
       } finally {
         setTimeout(() => {
           isProcessingScan = false;
-        }, 3000);
+        }, 5000);
       }
       
     },
