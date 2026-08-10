@@ -136,6 +136,7 @@ function initScanner(scannerId) {
           isProcessingScan = false;
         }, 3000);
       }
+      
     },
     () => {}
   );
