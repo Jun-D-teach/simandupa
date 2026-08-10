@@ -4210,8 +4210,11 @@ app.get("*", (req, res) => {
 // setInterval(absentSchedulerTick, 60000);
 // absentSchedulerTick();
 console.log("⚠️ WA otomatis ke ortu dinonaktifkan");
-setInterval(processWAQueue, 3000); // Jalankan setiap 3 detik
-console.log("✅ WA Queue Worker aktif");
+
+//ini esebab duplikasi wam karena di woeker js juga ada
+//setInterval(processWAQueue, 3000); // Jalankan setiap 3 detik
+//console.log("✅ WA Queue Worker aktif");
+
 app.listen(PORT, "0.0.0.0", async () => {
   const frontendReady = fs.existsSync(path.join(clientDistPath, "index.html"));
   console.log(`Server running on port ${PORT}`);
@@ -4221,9 +4224,10 @@ app.listen(PORT, "0.0.0.0", async () => {
   try {
     await testConnection();
     await ensureSchema();
-    setInterval(absentSchedulerTick, 60 * 1000);
-    console.log("Penjadwal absen otomatis aktif (cek tiap menit)");
+    //setInterval(absentSchedulerTick, 60 * 1000);
+    //console.log("Penjadwal absen otomatis aktif (cek tiap menit)");
   } catch (error) {
     console.error("Server started but DB setup failed:", error.message);
   }
+  
 });
