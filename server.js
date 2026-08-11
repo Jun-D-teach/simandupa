@@ -4212,8 +4212,8 @@ app.get("*", (req, res) => {
 console.log("⚠️ WA otomatis ke ortu dinonaktifkan");
 
 //ini esebab duplikasi wam karena di woeker js juga ada
-//setInterval(processWAQueue, 3000); // Jalankan setiap 3 detik
-//console.log("✅ WA Queue Worker aktif");
+setInterval(processWAQueue, 5000); // Jalankan setiap 3 detik
+console.log("✅ WA Queue Worker aktif");
 
 app.listen(PORT, "0.0.0.0", async () => {
   const frontendReady = fs.existsSync(path.join(clientDistPath, "index.html"));
