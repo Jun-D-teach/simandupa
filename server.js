@@ -1900,6 +1900,11 @@ app.post(
             skipped++;
             continue;
           }
+       // Cek apakah guru sudah ada di database
+       const [existingTeacher] = await connection.query(
+         "SELECT teacher_id FROM teachers WHERE teacher_id = ? LIMIT 1",
+         [teacher_id],
+       );
 
           if (existingTeacher.length > 0) {
             // Update guru yang sudah ada

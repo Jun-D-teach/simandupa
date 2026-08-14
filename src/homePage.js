@@ -109,22 +109,23 @@ function getHomePage() {
           </div>
 
           <!-- Tombol Login -->
-          <div style="text-align: center; margin-bottom: 30px;">
-            <a href="/?page=login" style="
-              display: inline-block;
-              background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-              color: white;
-              font-weight: bold;
-              font-size: 18px;
-              padding: 18px 50px;
-              border-radius: 12px;
-              text-decoration: none;
-              box-shadow: 0 8px 20px rgba(37, 99, 235, 0.4);
-              transition: transform 0.2s;
-            " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
-              🔐 Login ke Sistem
-            </a>
-          </div>
+          <div style="display:flex;gap:14px;flex-wrap:wrap;justify-content:center;margin-top:26px;">
+  <a href="/?page=login" style="text-decoration:none;background:white;border-radius:16px;padding:18px 26px;box-shadow:0 8px 24px rgba(0,0,0,.12);text-align:center;min-width:130px;transition:transform .2s;">
+    <div style="font-size:34px;">🛡️</div>
+    <div style="font-weight:bold;color:#0f172a;margin-top:6px;">Admin</div>
+    <div style="font-size:12px;color:#64748b;">Panel administrasi</div>
+  </a>
+  <a href="/?page=teacher-login" style="text-decoration:none;background:white;border-radius:16px;padding:18px 26px;box-shadow:0 8px 24px rgba(0,0,0,.12);text-align:center;min-width:130px;">
+    <div style="font-size:34px;">👨‍🏫</div>
+    <div style="font-weight:bold;color:#0f172a;margin-top:6px;">Guru</div>
+    <div style="font-size:12px;color:#64748b;">Portal guru & wali kelas</div>
+  </a>
+  <a href="/?page=student-login" style="text-decoration:none;background:white;border-radius:16px;padding:18px 26px;box-shadow:0 8px 24px rgba(0,0,0,.12);text-align:center;min-width:130px;">
+    <div style="font-size:34px;">🎓</div>
+    <div style="font-weight:bold;color:#0f172a;margin-top:6px;">Siswa</div>
+    <div style="font-size:12px;color:#64748b;">Portal siswa</div>
+  </a>
+</div>
 
           <!-- Info Footer -->
           <div style="

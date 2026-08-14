@@ -75,7 +75,11 @@ function formatTimeDisplay(value) {
 }
 
 function renderTeacherPortal(teacher) {
+  // Pengaman jika parameter teacher kosong/null
+  if (!teacher) teacher = {};
+
   const isWaliKelas = (teacher.roles || []).includes("wali_kelas");
+  const teacherId = teacher.teacher_id || "";
 
   document.querySelector("#app").innerHTML = `
     <div class="teacher-page">
@@ -90,33 +94,40 @@ function renderTeacherPortal(teacher) {
             </div>
           </div>
 
-          <button id="teacherLogoutBtn" class="logout-modern">Logout</button>
-        </div>
-
-        <div class="modern-card">
-          <div class="modern-card-body">
-            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:20px;">
-              <button class="teacherTabBtn btn-primary-modern" data-tab="profile">Profil</button>
-
-              ${
-                isWaliKelas
-                  ? `<button class="teacherTabBtn btn-secondary-modern" data-tab="attendance">Monitoring Absensi</button>`
-                  : ""
-              }
-<a href="attendance-monitoring.html" class="menu-item">
-  📊 Monitoring Siswa Saya
-</a>
-              <button class="teacherTabBtn btn-secondary-modern" data-tab="permitForm">Form Ijin Siswa</button>
-              <button class="teacherTabBtn btn-secondary-modern" data-tab="permitHistory">History Ijin</button>
-            </div>
-
-            <div id="teacherTabContent"></div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+            <a href="/?page=scanner&scanner=${encodeURIComponent(teacherId)}" target="_blank" style="background:#16a34a;color:white;text-decoration:none;padding:10px 18px;border-radius:12px;font-weight:bold;box-shadow:0 6px 16px rgba(22,163,74,.35);">📷 Buka Scanner</a>
+            <button id="teacherLogoutBtn" class="logout-modern">Logout</button>
           </div>
         </div>
+
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:20px;">
+          <button class="teacherTabBtn btn-primary-modern" data-tab="profile">Profil</button>
+          ${
+            isWaliKelas
+              ? `<button class="teacherTabBtn btn-secondary-modern" data-tab="attendance">📊 Monitoring Siswa Saya</button>`
+              : ""
+          }
+          <button class="teacherTabBtn btn-secondary-modern" data-tab="permitForm">Form Ijin Siswa</button>
+          <button class="teacherTabBtn btn-secondary-modern" data-tab="permitHistory">History Ijin</button>
+        </div>
+
+        <div id="teacherTabContent"></div>
 
       </div>
     </div>
   `;
+
+  // --- EVENT LISTENER LOGOUT ---
+  const logoutBtn = document.querySelector("#teacherLogoutBtn");
+  if (logoutBtn) {
+    logoutBtn.addEventListener("click", () => {
+      // Hapus data sesi di LocalStorage / SessionStorage
+      localStorage.clear(); // atau localStorage.removeItem('token');
+
+      // Redirect kembali ke halaman utama / login
+      window.location.href = "/";
+    });
+  }
 }
 function setActiveTeacherTab(activeTab) {
   document.querySelectorAll(".teacherTabBtn").forEach((btn) => {

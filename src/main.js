@@ -30,6 +30,13 @@ function requireAuth() {
   }
   return true;
 }
+function requireScannerAccess(){
+    if(isLoggedIn() || localStorage.getItem("simTeacher") || localStorage.getItem("simStudent")){
+        return true;
+    }
+    window.location.href="/?page=login";
+    return false;
+}
 
 function getCurrentAcademicInfo() {
   const semester = localStorage.getItem("simCurrentSemester") || "-";
@@ -314,7 +321,11 @@ function renderPlaceholderPage(title, description) {
           <button id="loginBtn" style="width:100%; padding:12px; background:#2563eb; color:white; border:none; border-radius:8px; cursor:pointer;">
             Login
           </button>
-
+          <div style="margin-top:18px;text-align:center;font-size:13px;color:#64748b;">
+            Masuk sebagai:
+            <a href="/?page=teacher-login" style="color:#2563eb;font-weight:bold;">Guru</a> •
+            <a href="/?page=student-login" style="color:#16a34a;font-weight:bold;">Siswa</a>
+          </div>
           <div id="loginResult" style="margin-top:16px;"></div>
 
           <div style="margin-top:20px;">
@@ -807,23 +818,52 @@ function renderPlaceholderPage(title, description) {
       initSidebarToggle();
       document.getElementById("logoutBtn")?.addEventListener("click", logout);
     }
-  } else if (PAGE === "teacher-login") {
-    document.querySelector("#app").innerHTML = `
-    <div style="max-width:420px; margin:60px auto; background:white; padding:24px; border-radius:14px;">
-      <h2>Login Guru</h2>
-
-      <input id="teacherUsername" placeholder="NIP / Email" style="width:100%; padding:10px; margin-top:10px;" />
-      <input id="teacherPassword" type="password" placeholder="Password" style="width:100%; padding:10px; margin-top:10px;" />
-
-      <button id="teacherLoginBtn" style="width:100%; margin-top:14px; padding:10px; background:#2563eb; color:white;">
-        Login
-      </button>
-
-      <div id="teacherLoginResult" style="margin-top:10px;"></div>
-    </div>
-  `;
-
-    initTeacherLoginPage();
+        } else if (PAGE === "student-login") {
+      document.querySelector("#app").innerHTML = `
+      <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#14532d,#16a34a);font-family:Arial,sans-serif;padding:20px;">
+        <div style="background:white;border-radius:20px;padding:36px;width:100%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,.3);">
+          <div style="text-align:center;margin-bottom:24px;">
+            <div style="font-size:44px;">🎓</div>
+            <h2 style="margin:8px 0 4px;color:#0f172a;">Login Siswa</h2>
+            <p style="color:#64748b;font-size:13px;margin:0;">MAN 2 Palembang</p>
+          </div>
+          <label style="font-size:12px;font-weight:bold;color:#334155;">Username</label>
+          <input id="studentUsername" style="width:100%;padding:12px;margin:6px 0 12px;border:1px solid #cbd5e1;border-radius:10px;" placeholder="Username siswa" />
+          <label style="font-size:12px;font-weight:bold;color:#334155;">Password</label>
+          <input id="studentPassword" type="password" style="width:100%;padding:12px;margin:6px 0 12px;border:1px solid #cbd5e1;border-radius:10px;" placeholder="Password" />
+          <button id="studentLoginBtn" style="width:100%;padding:13px;background:#16a34a;color:white;border:none;border-radius:10px;font-weight:bold;cursor:pointer;">Masuk sebagai Siswa</button>
+          <div id="studentLoginResult" style="margin-top:12px;"></div>
+          <div style="margin-top:18px;text-align:center;font-size:13px;">
+            <a href="/?page=login" style="color:#2563eb;">Login Admin</a> •
+            <a href="/?page=teacher-login" style="color:#2563eb;">Login Guru</a> •
+            <a href="/" style="color:#64748b;">Beranda</a>
+          </div>
+        </div>
+      </div>`;
+      initStudentLoginPage();
+     } else if (PAGE === "teacher-login") {
+      document.querySelector("#app").innerHTML = `
+      <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#0f172a,#1e3a8a);font-family:Arial,sans-serif;padding:20px;">
+        <div style="background:white;border-radius:20px;padding:36px;width:100%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,.3);">
+          <div style="text-align:center;margin-bottom:24px;">
+            <div style="font-size:44px;">👨‍🏫</div>
+            <h2 style="margin:8px 0 4px;color:#0f172a;">Login Guru</h2>
+            <p style="color:#64748b;font-size:13px;margin:0;">MAN 2 Palembang</p>
+          </div>
+          <label style="font-size:12px;font-weight:bold;color:#334155;">Username</label>
+          <input id="teacherUsername" style="width:100%;padding:12px;margin:6px 0 12px;border:1px solid #cbd5e1;border-radius:10px;" placeholder="Username guru" />
+          <label style="font-size:12px;font-weight:bold;color:#334155;">Password</label>
+          <input id="teacherPassword" type="password" style="width:100%;padding:12px;margin:6px 0 12px;border:1px solid #cbd5e1;border-radius:10px;" placeholder="Password" />
+          <button id="teacherLoginBtn" style="width:100%;padding:13px;background:#2563eb;color:white;border:none;border-radius:10px;font-weight:bold;cursor:pointer;">Masuk sebagai Guru</button>
+          <div id="teacherLoginResult" style="margin-top:12px;"></div>
+          <div style="margin-top:18px;text-align:center;font-size:13px;">
+            <a href="/?page=login" style="color:#2563eb;">Login Admin</a> •
+            <a href="/?page=student-login" style="color:#2563eb;">Login Siswa</a> •
+            <a href="/" style="color:#64748b;">Beranda</a>
+          </div>
+        </div>
+      </div>`;
+      initTeacherLoginPage();
   } else if (PAGE === "teacher-portal") {
     initTeacherPortalPage();
   } else if (PAGE === "bk") {
@@ -842,7 +882,7 @@ function renderPlaceholderPage(title, description) {
     }
     } else if (PAGE === "scanner") {
     // WAJIB LOGIN untuk akses scanner
-    if (!requireAuth()) {
+    if(!requireScannerAccess()){
       return; 
     }
 
