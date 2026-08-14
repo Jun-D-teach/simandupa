@@ -4186,6 +4186,152 @@ app.get("/api/export/homeroom-time-report", async (req, res) => {
   }
 });
 
+// ============ MONITORING ABSENSI (SUDAH / BELUM MASUK & PULANG) ============
+function buildMonitoringSummary(rows) {
+  return {
+    total: rows.length,
+    sudah_masuk: rows.filter((r) => r.jam_masuk).length,
+    tidak_hadir: rows.filter((r) => !r.jam_masuk && r.jam_tidak_hadir).length,
+    belum_masuk: rows.filter((r) => !r.jam_masuk && !r.jam_tidak_hadir).length,
+    sudah_pulang: rows.filter((r) => r.jam_pulang).length,
+    belum_pulang: rows.filter((r) => r.jam_masuk && !r.jam_pulang).length,
+    terlambat: rows.filter((r) => r.status_masuk === "terlambat" || r.status_masuk === "sangat terlambat").length,
+  };
+}
+
+// ADMIN: semua siswa
+app.get("/api/admin/monitoring", async (req, res) => {
+  try {
+    const { classId = "", date = "" } = req.query;
+    const targetDate = date || formatDateToYmd(new Date());
+    const conditions = ["s.status_active = 'aktif'"];
+   const params = [targetDate, targetDate, targetDate];
+    if (classId) { conditions.push("s.class_id = ?"); params.push(classId); }
+
+    const [rows] = await pool.query(
+      `SELECT s.student_id, s.student_name, s.nis, s.nisn, s.class_id, c.class_name,
+        a_masuk.attendance_time AS jam_masuk, a_masuk.status AS status_masuk,
+        a_pulang.attendance_time AS jam_pulang, a_th.attendance_time AS jam_tidak_hadir
+       FROM students s
+       LEFT JOIN classes c ON c.class_id = s.class_id
+       LEFT JOIN attendance a_masuk ON a_masuk.student_id = s.student_id
+         AND a_masuk.attendance_date = ? AND a_masuk.status IN ('hadir','terlambat','sangat terlambat')
+       LEFT JOIN attendance a_pulang ON a_pulang.student_id = s.student_id
+           AND a_pulang.attendance_date = ? AND a_pulang.status = 'pulang'
+         LEFT JOIN attendance a_th ON a_th.student_id = s.student_id
+           AND a_th.attendance_date = ? AND a_th.status = 'tidak hadir'
+       WHERE ${conditions.join(" AND ")}
+       ORDER BY s.class_id ASC, s.student_name ASC`,
+      params
+    );
+    res.json({ success: true, date: targetDate, summary: buildMonitoringSummary(rows), students: rows });
+  } catch (error) {
+    console.error("ADMIN MONITORING ERROR:", error);
+    res.status(500).json({ success: false, message: "Gagal memuat monitoring", error: error.message });
+  }
+});
+
+// WALI KELAS: hanya kelas perwalian
+app.get("/api/teacher/:teacherId/monitoring", async (req, res) => {
+  try {
+    const { teacherId } = req.params;
+    const { date = "" } = req.query;
+    const targetDate = date || formatDateToYmd(new Date());
+
+    const [classRows] = await pool.query(
+      "SELECT class_id, class_name FROM classes WHERE wali_kelas_id = ? ORDER BY class_name ASC",
+      [teacherId]
+    );
+    if (!classRows.length) return res.status(403).json({ success: false, message: "Anda bukan wali kelas." });
+
+    const classIds = classRows.map((c) => c.class_id);
+    const [rows] = await pool.query(
+      `SELECT s.student_id, s.student_name, s.nis, s.nisn, s.class_id, c.class_name,
+        a_masuk.attendance_time AS jam_masuk, a_masuk.status AS status_masuk,
+        a_pulang.attendance_time AS jam_pulang
+       FROM students s
+       LEFT JOIN classes c ON c.class_id = s.class_id
+       LEFT JOIN attendance a_masuk ON a_masuk.student_id = s.student_id
+         AND a_masuk.attendance_date = ? AND a_masuk.status IN ('hadir','terlambat','sangat terlambat')
+       LEFT JOIN attendance a_pulang ON a_pulang.student_id = s.student_id
+         AND a_pulang.attendance_date = ? AND a_pulang.status = 'pulang'
+       WHERE s.status_active = 'aktif' AND s.class_id IN (${classIds.map(() => "?").join(",")})
+       ORDER BY s.class_id ASC, s.student_name ASC`,
+      [targetDate, targetDate, targetDate, ...classIds]
+    );
+    res.json({ success: true, date: targetDate, classes: classRows, summary: buildMonitoringSummary(rows), students: rows });
+  } catch (error) {
+    console.error("TEACHER MONITORING ERROR:", error);
+    res.status(500).json({ success: false, message: "Gagal memuat monitoring", error: error.message });
+  }
+});
+// ============ KIRIM WA MANUAL UNTUK SISWA BELUM ABSEN ============
+app.post("/api/monitoring/notify", async (req, res) => {
+  try {
+    const { student_id, notify_type, sender_type = "admin", teacher_id = "" } = req.body;
+
+    if (!student_id || !["sangat_terlambat", "tidak_hadir"].includes(notify_type)) {
+      return res.status(400).json({ success: false, message: "Data tidak valid" });
+    }
+
+    const [studentRows] = await pool.query(
+      `SELECT s.student_id, s.student_name, s.class_id, s.parent_name, s.parent_phone,
+              c.wali_kelas_id, t.teacher_name AS wali_kelas_name
+       FROM students s
+       LEFT JOIN classes c ON c.class_id = s.class_id
+       LEFT JOIN teachers t ON t.teacher_id = c.wali_kelas_id
+       WHERE s.student_id = ? LIMIT 1`,
+      [student_id]
+    );
+    if (!studentRows.length) return res.status(404).json({ success: false, message: "Siswa tidak ditemukan" });
+    const student = studentRows[0];
+
+    // Wali kelas hanya boleh kirim ke siswa perwaliannya
+    if (sender_type === "teacher" && student.wali_kelas_id !== teacher_id) {
+      return res.status(403).json({ success: false, message: "Anda bukan wali kelas siswa ini" });
+    }
+    if (!student.parent_phone) {
+      return res.status(400).json({ success: false, message: "Nomor WA orang tua siswa ini belum diisi" });
+    }
+
+    const now = new Date();
+    const hari = now.toLocaleDateString("id-ID", { weekday: "long" });
+    const tanggal = now.toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
+    const timeHms = formatTimeToHms(now);
+    const jam = String(timeHms).slice(0, 5);
+    const ymd = formatDateToYmd(now);
+    const status = notify_type === "sangat_terlambat" ? "sangat terlambat" : "tidak hadir";
+
+    // 1) Catat absensi manual (aman: tidak duplikat karena INSERT IGNORE + ID pasti)
+    const attendanceId = `MAN-${ymd.replace(/-/g, "")}-${student_id}-${notify_type === "tidak_hadir" ? "TH" : "ST"}`;
+    await pool.query(
+      `INSERT IGNORE INTO attendance
+        (attendance_id, student_id, student_name, class_id, attendance_date, attendance_time, status, scanner_id, notification_sent)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'SYSTEM', 0)`,
+      [attendanceId, student.student_id, student.student_name, student.class_id, ymd, timeHms, status]
+    );
+
+    // 2) Susun pesan WA
+    const senderLabel = sender_type === "teacher"
+      ? `Wali Kelas ${student.class_id} (${student.wali_kelas_name || "-"})`
+      : "Admin MAN 2 Palembang";
+
+    const message = notify_type === "sangat_terlambat"
+      ? `Assalamu'alaikum wr. wb.\nYth. Bapak/Ibu orang tua/wali dari Ananda ${student.student_name} (${student.class_id}).\n\nKami informasikan bahwa Ananda TELAH HADIR di sekolah pada ${hari}, ${tanggal} pukul ${jam} WIB dengan status SANGAT TERLAMBAT.\n\nMohon bimbingannya agar Ananda berangkat lebih tepat waktu. Terima kasih.\n\n- ${senderLabel}`
+      : `Assalamu'alaikum wr. wb.\nYth. Bapak/Ibu orang tua/wali dari Ananda ${student.student_name} (${student.class_id}).\n\nKami informasikan bahwa hingga pukul ${jam} WIB pada ${hari}, ${tanggal}, Ananda TIDAK HADIR di sekolah dan belum ada keterangan.\n\nMohon konfirmasi kehadiran Ananda kepada wali kelas. Terima kasih.\n\n- ${senderLabel}`;
+
+    // 3) Masuk antrean WA (dikirim worker, tetap anti-spam)
+    await pool.query(
+      "INSERT INTO wa_queue (phone, message, attendance_id, status, created_at) VALUES (?, ?, ?, 'pending', NOW())",
+      [student.parent_phone, message, attendanceId]
+    );
+
+    res.json({ success: true, message: `Notifikasi WA untuk ortu ${student.student_name} masuk antrean pengiriman.` });
+  } catch (error) {
+    console.error("MANUAL NOTIFY ERROR:", error);
+    res.status(500).json({ success: false, message: "Gagal mengirim notifikasi", error: error.message });
+  }
+});
 app.use(express.static(path.join(__dirname, "dist")));
 const db = require("./db");
 app.get("*", (req, res) => {

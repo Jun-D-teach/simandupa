@@ -12,6 +12,7 @@ import { initClassesPage } from "./classesPage";
 import { initTeachersPage } from "./teachersPage";
 import { initTeacherLoginPage } from "./teacherLoginPage";
 import { initTeacherPortalPage } from "./teacherPortalPage";
+import { initMonitoringPage } from "./monitoringPage";
 import { initImportGuruPage } from "./ImportGuruPage"; // Pastikan nama file sesuai
 import { getHomePage } from "./homePage";
 
@@ -126,6 +127,7 @@ function getSidebarLayout(pageTitle, pageDescription, contentHtml) {
 
         <nav style="display:flex; flex-direction:column; gap:10px;">
           ${getSidebarLink("dashboard", "Dashboard", "📊")}
+                          ${getSidebarLink("monitoring","Monitoring Absensi","🟢")}
           ${getSidebarLink("profile", "Profil Madrasah", "🏫")}
           ${getSidebarLink("classes", "Kelas", "🏫")}
           ${getSidebarLink("students", "Siswa", "🎓")}
@@ -401,6 +403,19 @@ function renderPlaceholderPage(title, description) {
 
       document.getElementById("logoutBtn")?.addEventListener("click", logout);
     }
+        } else if (PAGE === "monitoring") {
+      if (!requireAuth()) {
+        // redirect otomatis ke login
+      } else {
+        await syncAcademicInfo();
+        document.querySelector("#app").innerHTML = getSidebarLayout(
+          "Monitoring Absensi",
+          "Pantau siswa yang sudah dan belum absen masuk / pulang.",
+          `<div id="monitoringPageContent"></div>`
+        );
+        initSidebarToggle();
+        initMonitoringPage();
+      }
   } else if (PAGE === "profile") {
     if (!requireAuth()) {
       //

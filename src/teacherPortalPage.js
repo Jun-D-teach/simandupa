@@ -103,7 +103,9 @@ function renderTeacherPortal(teacher) {
                   ? `<button class="teacherTabBtn btn-secondary-modern" data-tab="attendance">Monitoring Absensi</button>`
                   : ""
               }
-
+<a href="attendance-monitoring.html" class="menu-item">
+  📊 Monitoring Siswa Saya
+</a>
               <button class="teacherTabBtn btn-secondary-modern" data-tab="permitForm">Form Ijin Siswa</button>
               <button class="teacherTabBtn btn-secondary-modern" data-tab="permitHistory">History Ijin</button>
             </div>
@@ -335,8 +337,33 @@ function renderAttendanceTab(teacher) {
   `;
 
   initHomeroomAttendanceEvents(teacher);
+  initManualNotify(teacher);
 }
-
+function initManualNotify(teacher) {
+  if (window._waManualListener) return;
+  window._waManualListener = true;
+  document.addEventListener("click", async (e) => {
+    const btn = e.target.closest(".btnWaManual");
+    if (!btn) return;
+    const { student, name, type } = btn.dataset;
+    const label = type === "sangat_terlambat" ? "HADIR tetapi SANGAT TERLAMBAT" : "TIDAK HADIR";
+    if (!confirm(`Kirim WA ke orang tua ${name}?\nIsi pesan: siswa ${label}.`)) return;
+    const old = btn.textContent;
+    btn.disabled = true; btn.textContent = "⏳ Antre...";
+    try {
+      const result = await fetchJson(`${API_URL}/api/monitoring/notify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ student_id: student, notify_type: type, sender_type: "teacher", teacher_id: teacher.teacher_id })
+      });
+      alert("✅ " + result.message);
+      loadHomeroomAttendance(teacher);
+    } catch (err) {
+      alert("❌ " + err.message);
+      btn.disabled = false; btn.textContent = old;
+    }
+  });
+}
 function initTeacherTabs(teacher) {
   document.querySelectorAll(".teacherTabBtn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -484,112 +511,73 @@ function renderPermitHistory(result) {
 }
 
 async function loadHomeroomAttendance(teacher) {
-  const date =
-    document.getElementById("wkAttendanceDate")?.value || getTodayDate();
+  const date = document.getElementById("wkAttendanceDate")?.value || getTodayDate();
   const resultBox = document.getElementById("wkAttendanceResult");
-
   if (!resultBox) return;
-
   resultBox.innerHTML = "Memuat absensi...";
-
   try {
     const result = await fetchJson(
-      `${API_URL}/api/teacher/${teacher.teacher_id}/homeroom/attendance?date=${date}`,
+      `${API_URL}/api/teacher/${teacher.teacher_id}/monitoring?date=${date}`
     );
-
     const summary = result.summary || {};
-    const rows = result.data || [];
-    window._lastHomeroomAttendance = {
-      date,
-      classes: result.classes || [],
-      rows,
-    };
+    const rows = result.students || [];
+    window._lastHomeroomAttendance = { date, classes: result.classes || [], rows };
+
+        const belumMasuk = rows.filter((r) => !r.jam_masuk && !r.jam_tidak_hadir);
+    const tidakHadir = rows.filter((r) => !r.jam_masuk && r.jam_tidak_hadir);
+    const belumPulang = rows.filter((r) => r.jam_masuk && !r.jam_pulang);
+
     resultBox.innerHTML = `
       <div class="history-filter" style="margin-bottom:16px;">
-        <div class="modern-card-body" style="background:#e0f2fe; border-radius:16px;">
-          <b>Total Siswa</b><br>${summary.total_students || 0}
-        </div>
-
-        <div class="modern-card-body" style="background:#dcfce7; border-radius:16px;">
-          <b>Sudah Absen</b><br>${summary.checked_in || 0}
-        </div>
-
-        <div class="modern-card-body" style="background:#e5e7eb; border-radius:16px;">
-          <b>Belum Absen</b><br>${summary.not_checked_in || 0}
-        </div>
-
-        <div class="modern-card-body" style="background:#dcfce7; border-radius:16px;">
-          <b>Hadir</b><br>${summary.hadir || 0}
-        </div>
-
-        <div class="modern-card-body" style="background:#fef9c3; border-radius:16px;">
-          <b>Terlambat</b><br>${summary.terlambat || 0}
-        </div>
-
-        <div class="modern-card-body" style="background:#fee2e2; border-radius:16px;">
-          <b>Sangat Terlambat</b><br>${summary.sangat_terlambat || 0}
-        </div>
+        <div class="modern-card-body" style="background:#e0f2fe;border-radius:16px;"><b>Total Siswa</b><br>${summary.total || 0}</div>
+        <div class="modern-card-body" style="background:#dcfce7;border-radius:16px;"><b>Sudah Masuk</b><br>${summary.sudah_masuk || 0}</div>
+        <div class="modern-card-body" style="background:#fee2e2;border-radius:16px;"><b>Belum Masuk</b><br>${summary.belum_masuk || 0}</div>
+        <div class="modern-card-body" style="background:#fce7f3;border-radius:16px;"><b>Sudah Pulang</b><br>${summary.sudah_pulang || 0}</div>
+        <div class="modern-card-body" style="background:#fef9c3;border-radius:16px;"><b>Belum Pulang</b><br>${summary.belum_pulang || 0}</div>
       </div>
-
-      <div class="history-table-wrap">
-        <table class="history-table">
-          <thead>
-            <tr>
-              <th>Nama</th>
-              <th>Kelas</th>
-              <th>NIS</th>
-              <th>NISN</th>
-              <th>Jam</th>
-              <th>Status</th>
-              <th>Scanner</th>
-              <th>Orang Tua</th>
-              <th>HP</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            ${
-              rows.length
-                ? rows
-                    .map(
-                      (r) => `
-                        <tr>
-                          <td><b>${escapeHtml(r.student_name || "-")}</b></td>
-                          <td>${escapeHtml(r.class_id || "-")}</td>
-                          <td>${escapeHtml(r.nis || "-")}</td>
-                          <td>${escapeHtml(r.nisn || "-")}</td>
-                          <td>${escapeHtml(r.attendance_time || "-")}</td>
-                          <td>
-                            <span class="status-badge ${
-                              r.status === "hadir"
-                                ? "status-success"
-                                : r.status === "sangat terlambat"
-                                  ? "status-danger"
-                                  : ""
-                            }">
-                              ${escapeHtml(r.status || "-")}
-                            </span>
-                          </td>
-                          <td>${escapeHtml(r.scanner_id || "-")}</td>
-                          <td>${escapeHtml(r.parent_name || "-")}</td>
-                          <td>${escapeHtml(r.parent_phone || "-")}</td>
-                        </tr>
-                      `,
-                    )
-                    .join("")
-                : `<tr><td colspan="9">Tidak ada data siswa.</td></tr>`
-            }
-          </tbody>
-        </table>
-      </div>
+            ${renderBelumList("❌ BELUM ABSEN MASUK", belumMasuk, "#fee2e2", true)}
+      ${renderBelumList("🚫 TIDAK HADIR (sudah dikonfirmasi)", tidakHadir, "#e5e7eb")}
+      ${renderBelumList("🏠 BELUM ABSEN PULANG (masih di sekolah)", belumPulang, "#fef9c3")}
+      ${renderSudahTable(rows.filter((r) => r.jam_masuk))}
     `;
   } catch (error) {
-    resultBox.innerHTML = `
-      <div class="alert-danger">
-        ${escapeHtml(error.message)}
-      </div>
-    `;
+    resultBox.innerHTML = `<div class="alert-danger">${escapeHtml(error.message)}</div>`;
   }
+}
+
+function renderBelumList(title, list, bg, withActions = false) {
+  if (!list.length) return `<div class="modern-card-body" style="background:#dcfce7;border-radius:16px;margin-bottom:14px;">✅ ${title}: tidak ada</div>`;
+  return `
+    <div class="modern-card-body" style="background:${bg};border-radius:16px;margin-bottom:14px;">
+      <b>${title} (${list.length})</b>
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
+        ${list.map((s) => `
+          <span style="background:white;padding:6px 12px;border-radius:12px;font-size:13px;display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <b>${escapeHtml(s.student_name)}</b> (${escapeHtml(s.class_id)})
+            ${withActions ? `
+              <button class="btnWaManual" data-student="${escapeHtml(s.student_id)}" data-name="${escapeHtml(s.student_name)}" data-type="sangat_terlambat" style="background:#16a34a;color:#fff;border:none;border-radius:8px;padding:4px 8px;cursor:pointer;font-size:11px;font-weight:bold;">📩 Hadir (Sangat Terlambat)</button>
+              <button class="btnWaManual" data-student="${escapeHtml(s.student_id)}" data-name="${escapeHtml(s.student_name)}" data-type="tidak_hadir" style="background:#dc2626;color:#fff;border:none;border-radius:8px;padding:4px 8px;cursor:pointer;font-size:11px;font-weight:bold;">📩 Tidak Hadir</button>` : ""}
+          </span>`).join("")}
+      </div>
+    </div>`;
+}
+function renderSudahTable(rows) {
+  if (!rows.length) return `<div class="empty-state">Belum ada siswa yang absen masuk.</div>`;
+  return `
+    <div class="history-table-wrap">
+      <table class="history-table">
+        <thead><tr><th>Nama</th><th>Kelas</th><th>Jam Masuk</th><th>Status</th><th>Jam Pulang</th></tr></thead>
+        <tbody>${rows.map((r) => `
+          <tr>
+            <td><b>${escapeHtml(r.student_name)}</b></td>
+            <td>${escapeHtml(r.class_id || "-")}</td>
+            <td>${escapeHtml(r.jam_masuk || "-")}</td>
+            <td><span class="status-badge ${r.status_masuk === "hadir" ? "status-success" : r.status_masuk === "sangat terlambat" ? "status-danger" : ""}">${escapeHtml(String(r.status_masuk || "-").toUpperCase())}</span></td>
+            <td>${escapeHtml(r.jam_pulang || "belum")}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
 }
 
 function initHomeroomAttendanceEvents(teacher) {
