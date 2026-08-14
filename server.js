@@ -1320,7 +1320,14 @@ app.post("/api/attendance", async (req, res) => {
     
     // 5. Simpan ke WA Queue (bukan langsung kirim)
     if (student.parent_phone) {
-      const message = `Ananda ${student.student_name} (${student.class_id}) telah absen ${type} pada ${attendanceTime}. Status: ${status}.`;
+      const [yy, mm, dd] = attendanceDate.split("-").map(Number);
+const tglObj = new Date(yy, mm - 1, dd);
+const NAMA_HARI = ["Minggu","Senin","Selasa","Rabu","Kamis","Jumat","Sabtu"];
+const NAMA_BULAN = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+const namaHari = NAMA_HARI[tglObj.getDay()];
+const namaTanggal = `${dd} ${NAMA_BULAN[mm - 1]} ${yy}`;
+
+const message = `Ananda ${student.student_name} (${student.class_id}) telah absen ${type} pada ${namaHari}, ${namaTanggal} pukul ${attendanceTime}. Status: ${status}.`;
       await connection.query(
         "INSERT INTO wa_queue (phone, message, attendance_id, status, created_at) VALUES (?, ?, ?, 'pending', NOW())",
         [student.parent_phone, message, attendanceId]
