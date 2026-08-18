@@ -164,7 +164,19 @@ async function initImportPage() {
 
         uploadBtn.disabled = true;
         uploadBtn.textContent = "⏳ Mengupload...";
-
+     // Hitung baris data di Excel (untuk tampilan total & dilewati)
+     let localTotal = 0;
+     try {
+       const buf = await file.arrayBuffer();
+       const wbLocal = XLSX.read(buf, { type: "array" });
+       const wsLocal = wbLocal.Sheets[wbLocal.SheetNames[0]];
+       const rowsLocal = XLSX.utils.sheet_to_json(wsLocal, { defval: "" });
+       localTotal = rowsLocal.filter((r) =>
+         Object.values(r).some((v) => String(v).trim() !== "")
+       ).length;
+     } catch (e) {
+       localTotal = 0;
+     }
         const formData = new FormData();
         formData.append("file", file);
 
@@ -192,15 +204,17 @@ async function initImportPage() {
           return;
         }
 
-        importResult.innerHTML = `
-          <p class="text-green-600 font-bold mb-2">✅ Import berhasil!</p>
-          <ul class="text-sm space-y-1">
-            <li>Total data diproses: <b>${result.total}</b></li>
-            <li>Berhasil dimasukkan/diupdate: <b>${result.inserted}</b></li>
-            <li>Dilewati (error): <b>${result.skipped}</b></li>
-          </ul>
-        `;
-        
+           const inserted = result.inserted ?? result.total ?? 0;
+     const total = localTotal || result.total || inserted;
+     const skipped = result.skipped ?? Math.max(total - inserted, 0);
+     importResult.innerHTML = `
+       <p class="text-green-600 font-bold mb-2">✅ Import berhasil!</p>
+       <ul class="text-sm space-y-1">
+         <li>Total data diproses: <b>${total}</b></li>
+         <li>Berhasil dimasukkan/diupdate: <b>${inserted}</b></li>
+         <li>Dilewati (error): <b>${skipped}</b></li>
+       </ul>
+     `;
         excelFile.value = "";
 
       } catch (error) {

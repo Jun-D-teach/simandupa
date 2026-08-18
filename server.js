@@ -483,7 +483,10 @@ app.get("/api/students", verifyAdminApiKey, async (req, res) => {
 });
 
 app.post("/api/students", verifyAdminApiKey, async (req, res) => {
+  let connection;  // ✅ BARIS 1: deklarasi connection
   try {
+    connection = await pool.getConnection();  // ✅ BARIS 2: ambil connection
+    
     const {
       student_id,
       nis,
@@ -506,42 +509,40 @@ app.post("/api/students", verifyAdminApiKey, async (req, res) => {
       password,
       qr_code,
     } = req.body;
-
+    
     if (!student_id || !student_name || !class_id) {
       return res.status(400).json({
         success: false,
         message: "student_id, student_name, dan class_id wajib diisi",
       });
     }
-
-    const [existingStudent] = await pool.query(
+    
+    const [existingStudent] = await connection.query(  // ✅ pakai connection
       `
-        SELECT student_id
-        FROM students
-        WHERE student_id = ?
-        LIMIT 1
-        `,
+      SELECT student_id
+      FROM students
+      WHERE student_id = ?
+      LIMIT 1
+      `,
       [student_id],
     );
-
     if (existingStudent.length > 0) {
       return res.status(409).json({
         success: false,
         message: "student_id sudah terdaftar",
       });
     }
-
+    
     if (username) {
-      const [existingUsername] = await pool.query(
+      const [existingUsername] = await connection.query(  // ✅ pakai connection
         `
-          SELECT student_id
-          FROM students
-          WHERE username = ?
-          LIMIT 1
-          `,
+        SELECT student_id
+        FROM students
+        WHERE username = ?
+        LIMIT 1
+        `,
         [username],
       );
-
       if (existingUsername.length > 0) {
         return res.status(409).json({
           success: false,
@@ -549,44 +550,48 @@ app.post("/api/students", verifyAdminApiKey, async (req, res) => {
         });
       }
     }
-
+    
     if (!nisn) {
       return res.status(400).json({
         success: false,
-        message:
-          "NISN wajib diisi karena akan digunakan sebagai username siswa",
+        message: "NISN wajib diisi karena akan digunakan sebagai username siswa",
       });
     }
-
+    
     const defaultPassword = "default12345";
     const hashedPassword = await bcrypt.hash(defaultPassword, 10);
     const studentUsername = nisn;
-
-    await pool.query(
+    
+    await connection.query(  // ✅ pakai connection
       `
-        INSERT INTO students (
-          student_id,
-          nis,
-          nisn,
-          student_name,
-          gender,
-          birth_place,
-          birth_date,
-          address,
-          religion,
-          class_id,
-          entry_year,
-          status_active,
-          parent_id,
-          parent_name,
-          parent_phone,
-          parent_email,
-          parent_relation,
-          username,
-          password,
-          qr_code
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
+      INSERT INTO students (
+        student_id, nis, nisn, student_name, gender,
+        birth_place, birth_date, address, religion,
+        class_id, entry_year, status_active,
+        parent_id, parent_name, parent_phone,
+        parent_email, parent_relation,
+        username, password
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        nis = VALUES(nis),
+        nisn = VALUES(nisn),
+        student_name = VALUES(student_name),
+        gender = VALUES(gender),
+        birth_place = VALUES(birth_place),
+        birth_date = VALUES(birth_date),
+        address = VALUES(address),
+        religion = VALUES(religion),
+        class_id = VALUES(class_id),
+        entry_year = VALUES(entry_year),
+        status_active = VALUES(status_active),
+        parent_id = VALUES(parent_id),
+        parent_name = VALUES(parent_name),
+        parent_phone = VALUES(parent_phone),
+        parent_email = VALUES(parent_email),
+        parent_relation = VALUES(parent_relation),
+        username = COALESCE(username, VALUES(username)),
+        password = COALESCE(password, VALUES(password))
+      `,
       [
         student_id,
         nis || null,
@@ -605,31 +610,31 @@ app.post("/api/students", verifyAdminApiKey, async (req, res) => {
         parent_phone || null,
         parent_email || null,
         parent_relation || null,
-        studentUsername,
+        nisn || null,
         hashedPassword,
-        qr_code || null,
       ],
     );
-
+    
     res.status(201).json({
       success: true,
       message: "Data siswa berhasil ditambahkan",
     });
   } catch (error) {
+    if (connection) await connection.rollback();  // ✅ rollback kalau error
     console.error("Create student error:", error);
-
     if (error.code === "ER_DUP_ENTRY") {
       return res.status(409).json({
         success: false,
         message: "Data duplikat terdeteksi",
       });
     }
-
     res.status(500).json({
       success: false,
       message: "Gagal menambahkan siswa",
       error: error.message,
     });
+  } finally {  // ✅ FINALLY DIPASANG DI SINI
+    if (connection) connection.release();  // ✅ release connection
   }
 });
 app.put("/api/students/:studentId", verifyAdminApiKey, async (req, res) => {
@@ -1719,11 +1724,11 @@ app.post(
       }
 
       connection = await pool.getConnection();
-      await connection.beginTransaction();
-
-      let inserted = 0;
-
-      for (const row of data) {
+   await connection.beginTransaction();
+   let inserted = 0;
+   const defaultPassword = "default12345";
+   const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+   for (const row of data) {
         const student_id = String(row.student_id || "").trim();
         const nis = String(row.nis || "").trim();
         const nisn = String(row.nisn || "").trim();
@@ -1758,53 +1763,58 @@ app.post(
           );
         }
 
-        await connection.query(
-          `
-          INSERT INTO students (
-            student_id, nis, nisn, student_name, gender,
-            birth_place, birth_date, address, religion,
-            class_id, entry_year, status_active,
-            parent_id, parent_name, parent_phone,
-            parent_email, parent_relation
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON DUPLICATE KEY UPDATE
-            nis = VALUES(nis),
-            nisn = VALUES(nisn),
-            student_name = VALUES(student_name),
-            gender = VALUES(gender),
-            birth_place = VALUES(birth_place),
-            birth_date = VALUES(birth_date),
-            address = VALUES(address),
-            religion = VALUES(religion),
-            class_id = VALUES(class_id),
-            entry_year = VALUES(entry_year),
-            status_active = VALUES(status_active),
-            parent_id = VALUES(parent_id),
-            parent_name = VALUES(parent_name),
-            parent_phone = VALUES(parent_phone),
-            parent_email = VALUES(parent_email),
-            parent_relation = VALUES(parent_relation)
-          `,
-          [
-            student_id,
-            nis || null,
-            nisn || null,
-            student_name,
-            gender || null,
-            birth_place || null,
-            birth_date || null,
-            address || null,
-            religion || null,
-            class_id,
-            entry_year || null,
-            status_active || "aktif",
-            parent_id || null,
-            parent_name || null,
-            parent_phone || null,
-            parent_email || null,
-            parent_relation || null,
-          ],
-        );
+            await connection.query(
+       `
+       INSERT INTO students (
+         student_id, nis, nisn, student_name, gender,
+         birth_place, birth_date, address, religion,
+         class_id, entry_year, status_active,
+         parent_id, parent_name, parent_phone,
+         parent_email, parent_relation,
+         username, password
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         nis = VALUES(nis),
+         nisn = VALUES(nisn),
+         student_name = VALUES(student_name),
+         gender = VALUES(gender),
+         birth_place = VALUES(birth_place),
+         birth_date = VALUES(birth_date),
+         address = VALUES(address),
+         religion = VALUES(religion),
+         class_id = VALUES(class_id),
+         entry_year = VALUES(entry_year),
+         status_active = VALUES(status_active),
+         parent_id = VALUES(parent_id),
+         parent_name = VALUES(parent_name),
+         parent_phone = VALUES(parent_phone),
+         parent_email = VALUES(parent_email),
+         parent_relation = VALUES(parent_relation),
+         username = COALESCE(username, VALUES(username)),
+         password = COALESCE(password, VALUES(password))
+       `,
+       [
+         student_id,
+         nis || null,
+         nisn || null,
+         student_name,
+         gender || null,
+         birth_place || null,
+         birth_date || null,
+         address || null,
+         religion || null,
+         class_id,
+         entry_year || null,
+         status_active || "aktif",
+         parent_id || null,
+         parent_name || null,
+         parent_phone || null,
+         parent_email || null,
+         parent_relation || null,
+         nisn || null,
+         hashedPassword,
+       ],
+     );
 
         inserted++;
       }
@@ -1865,9 +1875,10 @@ app.post(
 
       let inserted = 0;
       let skipped = 0;
-      let errors = [];
-
-      for (const row of data) {
+        let errors = [];
+   const defaultPassword = "default12345";
+   const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+   for (const row of data) {
         try {
           const teacher_id = String(row.teacher_id || "").trim();
           const teacher_name = String(row.teacher_name || "").trim();
@@ -1875,6 +1886,7 @@ app.post(
           const phone = String(row.phone || "").trim();
           const email = String(row.email || "").trim();
           const status_active = String(row.status_active || "aktif").trim();
+          
           const roles = String(row.roles || "guru")
             .split(",")
             .map((r) => r.trim())
@@ -1908,8 +1920,7 @@ app.post(
 
           if (existingTeacher.length > 0) {
             // Update guru yang sudah ada
-            const defaultPassword = "default12345";
-            const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+        
 
             await connection.query(
               `
