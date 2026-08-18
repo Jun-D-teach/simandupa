@@ -13,6 +13,7 @@ import { initTeachersPage } from "./teachersPage";
 import { initTeacherLoginPage } from "./teacherLoginPage";
 import { initTeacherPortalPage } from "./teacherPortalPage";
 import { initMonitoringPage } from "./monitoringPage";
+import { initAccountManagerPage } from "./accountManagerPage";
 import { initImportGuruPage } from "./ImportGuruPage"; // Pastikan nama file sesuai
 import { getHomePage } from "./homePage";
 
@@ -135,6 +136,7 @@ function getSidebarLayout(pageTitle, pageDescription, contentHtml) {
         <nav style="display:flex; flex-direction:column; gap:10px;">
           ${getSidebarLink("dashboard", "Dashboard", "📊")}
                           ${getSidebarLink("monitoring","Monitoring Absensi","🟢")}
+                                          ${getSidebarLink("accounts","Akun & QR","🔐")}
           ${getSidebarLink("profile", "Profil Madrasah", "🏫")}
           ${getSidebarLink("classes", "Kelas", "🏫")}
           ${getSidebarLink("students", "Siswa", "🎓")}
@@ -918,7 +920,19 @@ function renderPlaceholderPage(title, description) {
     
     // Tambahkan event listener logout
     document.getElementById("logoutBtn")?.addEventListener("click", logout);
-
+    } else if (PAGE === "accounts") {
+      if (!requireAuth()) {
+        // redirect otomatis ke login
+      } else {
+        await syncAcademicInfo();
+        document.querySelector("#app").innerHTML = getSidebarLayout(
+          "Manajemen Akun & QR",
+          "Lihat username, reset password, dan generate QR Code siswa/guru — per orang atau massal.",
+          `<div id="accountManagerContent"></div>`
+        );
+        initSidebarToggle();
+        initAccountManagerPage();
+      }
   } else {
     // Fallback: Jika halaman tidak dikenal, kembalikan ke home
     document.querySelector("#app").innerHTML = getHomePage();

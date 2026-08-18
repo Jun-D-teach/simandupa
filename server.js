@@ -178,6 +178,19 @@ async function ensureSchema() {
     `INSERT IGNORE INTO settings (setting_key, setting_value) VALUES (?, ?)`,
     ["absent_notify_time", "08:00"],
   );
+    await pool.query(`CREATE TABLE IF NOT EXISTS student_logs (
+    log_id INT AUTO_INCREMENT PRIMARY KEY,
+    student_id VARCHAR(50) NOT NULL,
+    action VARCHAR(50) NOT NULL,
+    field_name VARCHAR(100) DEFAULT NULL,
+    old_value TEXT DEFAULT NULL,
+    new_value TEXT DEFAULT NULL,
+    ip_address VARCHAR(45) DEFAULT NULL,
+    user_agent VARCHAR(255) DEFAULT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_student_logs_student (student_id),
+    KEY idx_student_logs_created (created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 }
 
 //disini tempay coding wa otomatis jika tidak absen masuk, cari di kopian server js
@@ -210,6 +223,22 @@ function getWIBDate(dateObj = new Date()) {
   const utc = dateObj.getTime() + dateObj.getTimezoneOffset() * 60000;
   const wibTime = new Date(utc + 3600000 * 7);
   return wibTime;
+}
+// ============ LOG AKTIVITAS SISWA ============
+async function logStudentActivity(studentId, action, changes = [], req = null) {
+  try {
+    const ip = req ? String(req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "").slice(0, 45) : "";
+    const ua = req ? String(req.headers["user-agent"] || "").slice(0, 250) : "";
+    const list = changes.length ? changes : [{ field: null, old: null, new: null }];
+    for (const c of list) {
+      await pool.query(
+        "INSERT INTO student_logs (student_id, action, field_name, old_value, new_value, ip_address, user_agent) VALUES (?,?,?,?,?,?,?)",
+        [studentId, action, c.field || null, c.old || null, c.new || null, ip, ua]
+      );
+    }
+  } catch (e) {
+    console.error("STUDENT LOG ERROR:", e);
+  }
 }
 
 function verifyAdminApiKey(req, res, next) {
@@ -1489,7 +1518,7 @@ app.post("/api/student-login", async (req, res) => {
         message: "NISN atau password salah",
       });
     }
-
+   await logStudentActivity(student.student_id, "login", [], req);
     res.json({
       success: true,
       message: "Login siswa berhasil",
@@ -1567,7 +1596,7 @@ app.post("/api/student/change-password", async (req, res) => {
       `,
       [hashedPassword, student_id],
     );
-
+   await logStudentActivity(student_id, "change_password", [{ field: "password", old: "******", new: "******" }], req);
     res.json({
       success: true,
       message: "Password berhasil diubah",
@@ -2798,732 +2827,243 @@ app.post("/api/attendance/mark-absent", verifyAdminApiKey, async (req, res) => {
 
 //app.get("/api/export/report", verifyAdminApiKey, async (req, res) => {
 app.get("/api/export/report", async (req, res) => {
-  try {
-    const {
-      classId = "",
-      month = "",
-      year = "",
-      waliKelas = "Dra. Hj. Hajidah, M.Si",
-      nipWaliKelas = "196808081994032008",
-      kepalaMadrasah = "Drs. Iskandar, M.Si",
-      nipKepalaMadrasah = "196605012005011005",
-      semester = "Ganjil",
-      tahunPelajaran = "2026/2027",
-      tempat = "Palembang",
-      tanggalCetak = "",
-    } = req.query;
+try {
+const {
+classId = "", month = "", year = "",
+waliKelas = "Dra. Hj. Hajidah, M.Si", nipWaliKelas = "196808081994032008",
+kepalaMadrasah = "Drs. Iskandar, M.Si", nipKepalaMadrasah = "196605012005011005",
+semester = "Ganjil", tahunPelajaran = "2026/2027", tempat = "Palembang", tanggalCetak = "",
+} = req.query;
+if (!classId || !month || !year) return res.status(400).send("classId, month, year wajib diisi");
+const monthNumber = Number(month), yearNumber = Number(year);
+if (Number.isNaN(monthNumber) || Number.isNaN(yearNumber) || monthNumber < 1 || monthNumber > 12)
+  return res.status(400).send("month atau year tidak valid");
 
-    if (!classId) {
-      return res.status(400).send("classId wajib diisi");
-    }
+const monthNames = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+const monthName = monthNames[monthNumber - 1];
+const daysInMonth = new Date(yearNumber, monthNumber, 0).getDate();
+const monthStart = `${yearNumber}-${String(monthNumber).padStart(2, "0")}-01`;
+const monthEnd = `${yearNumber}-${String(monthNumber).padStart(2, "0")}-${String(daysInMonth).padStart(2, "0")}`;
 
-    if (!month) {
-      return res.status(400).send("month wajib diisi");
-    }
+const [students] = await pool.query(
+  `SELECT student_id, nis, nisn, student_name, gender, class_id
+   FROM students WHERE class_id = ? AND status_active = 'aktif' ORDER BY student_name ASC`,
+  [classId],
+);
+const [attendanceRows] = await pool.query(
+  `SELECT student_id, attendance_date, attendance_time, status
+   FROM attendance WHERE class_id = ? AND attendance_date BETWEEN ? AND ?
+   ORDER BY attendance_date ASC, attendance_time ASC`,
+  [classId, monthStart, monthEnd],
+);
 
-    if (!year) {
-      return res.status(400).send("year wajib diisi");
-    }
-
-    const monthNumber = Number(month);
-    const yearNumber = Number(year);
-
-    if (
-      Number.isNaN(monthNumber) ||
-      Number.isNaN(yearNumber) ||
-      monthNumber < 1 ||
-      monthNumber > 12
-    ) {
-      return res.status(400).send("month atau year tidak valid");
-    }
-
-    const monthNames = [
-      "Januari",
-      "Februari",
-      "Maret",
-      "April",
-      "Mei",
-      "Juni",
-      "Juli",
-      "Agustus",
-      "September",
-      "Oktober",
-      "November",
-      "Desember",
-    ];
-
-    const monthName = monthNames[monthNumber - 1];
-    const daysInMonth = new Date(yearNumber, monthNumber, 0).getDate();
-
-    const monthStart = `${yearNumber}-${String(monthNumber).padStart(2, "0")}-01`;
-    const monthEnd = `${yearNumber}-${String(monthNumber).padStart(2, "0")}-${String(daysInMonth).padStart(2, "0")}`;
-
-    const [students] = await pool.query(
-      `
-        SELECT
-          student_id,
-          nis,
-          nisn,
-          student_name,
-          gender,
-          class_id
-        FROM students
-        WHERE class_id = ? AND status_active = 'aktif'
-        ORDER BY student_name ASC
-        `,
-      [classId],
-    );
-
-    const [attendanceRows] = await pool.query(
-      `
-        SELECT
-          student_id,
-          attendance_date,
-          status
-        FROM attendance
-        WHERE class_id = ?
-          AND attendance_date BETWEEN ? AND ?
-        ORDER BY attendance_date ASC
-        `,
-      [classId, monthStart, monthEnd],
-    );
-
-    const attendanceMap = {};
-
-    attendanceRows.forEach((row) => {
-      const day = new Date(row.attendance_date).getDate();
-
-      if (!attendanceMap[row.student_id]) {
-        attendanceMap[row.student_id] = {};
-      }
-
-      attendanceMap[row.student_id][day] = row.status;
-    });
-
-    const rows = students.map((student, index) => {
-      const dailyAttendance = {};
-      let totalHadir = 0;
-      let totalTerlambat = 0;
-      let totalSangatTerlambat = 0;
-
-      for (let day = 1; day <= daysInMonth; day++) {
-        const status =
-          attendanceMap[student.student_id] &&
-          attendanceMap[student.student_id][day]
-            ? attendanceMap[student.student_id][day]
-            : "";
-
-        let symbol = "";
-
-        if (status === "hadir") {
-          symbol = "H";
-          totalHadir++;
-        } else if (status === "terlambat") {
-          symbol = "T";
-          totalTerlambat++;
-        } else if (status === "sangat terlambat") {
-          symbol = "ST";
-          totalSangatTerlambat++;
-        }
-
-        dailyAttendance[day] = symbol;
-      }
-
-      return {
-        no: index + 1,
-        nis: student.nis || "",
-        nisn: student.nisn || "",
-        student_name: student.student_name || "",
-        gender: student.gender || "",
-        dailyAttendance,
-        totalHadir,
-        totalTerlambat,
-        totalSangatTerlambat,
-      };
-    });
-
-    const safeTanggalCetak =
-      tanggalCetak ||
-      new Date().toLocaleDateString("id-ID", {
-        day: "2-digit",
-        month: "long",
-        year: "numeric",
-      });
-
-    const dayHeadersHtml = Array.from({ length: daysInMonth }, (_, i) => {
-      const day = i + 1;
-      return `<th class="center day-col">${day}</th>`;
-    }).join("");
-
-    const tableRowsHtml = rows
-      .map((row) => {
-        const dayCells = Array.from({ length: daysInMonth }, (_, i) => {
-          const day = i + 1;
-          return `<td class="center day-col">${row.dailyAttendance[day] || ""}</td>`;
-        }).join("");
-
-        return `
-          <tr>
-            <td class="center sticky-col-1">${row.no}</td>
-            <td class="center sticky-col-2">${row.nis}</td>
-            <td class="center sticky-col-3">${row.nisn}</td>
-            <td class="sticky-col-4">${row.student_name}</td>
-            <td class="center sticky-col-5">${row.gender}</td>
-            ${dayCells}
-            <td class="center total-hadir">${row.totalHadir}</td>
-            <td class="center total-terlambat">${row.totalTerlambat}</td>
-            <td class="center total-sangat-terlambat">${row.totalSangatTerlambat}</td>
-          </tr>
-        `;
-      })
-      .join("");
-
-    const html = `
-        <!DOCTYPE html>
-        <html lang="id">
-        <head>
-          <meta charset="UTF-8" />
-          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-          <title>Rekap Absensi ${classId} - ${monthName} ${year}</title>
-          <style>
-            * {
-              box-sizing: border-box;
-            }
-
-            body {
-              font-family: Arial, sans-serif;
-              background: #f3f4f6;
-              margin: 0;
-              padding: 24px;
-              color: #111827;
-            }
-
-            .page {
-              max-width: 1600px;
-              margin: 0 auto;
-              background: #ffffff;
-              border-radius: 18px;
-              box-shadow: 0 10px 30px rgba(0,0,0,0.08);
-              padding: 32px;
-            }
-
-            .print-bar {
-              display: flex;
-              justify-content: flex-end;
-              margin-bottom: 18px;
-            }
-
-            .print-btn {
-              background: #2563eb;
-              color: white;
-              border: none;
-              border-radius: 10px;
-              padding: 10px 16px;
-              cursor: pointer;
-              font-weight: bold;
-            }
-
-            .kop {
-              display: flex;
-              align-items: center;
-              gap: 18px;
-              border-bottom: 3px solid #111827;
-              padding-bottom: 18px;
-              margin-bottom: 24px;
-            }
-
-            .logo {
-              width: 78px;
-              height: 78px;
-              flex-shrink: 0;
-            }
-
-            .logo img {
-              width: 100%;
-              height: 100%;
-              object-fit: contain;
-            }
-
-            .kop-text h1 {
-              margin: 0;
-              font-size: 28px;
-              letter-spacing: 0.5px;
-            }
-
-            .kop-text h2 {
-              margin: 6px 0 0;
-              font-size: 18px;
-              font-weight: 600;
-              color: #374151;
-            }
-
-            .kop-text p {
-              margin: 6px 0 0;
-              color: #6b7280;
-              font-size: 14px;
-            }
-
-            .title-box {
-              margin: 18px 0 24px;
-              padding: 16px 20px;
-              border-radius: 14px;
-              background: linear-gradient(135deg, #eff6ff, #ecfdf5);
-              border: 1px solid #dbeafe;
-            }
-
-            .title-box h3 {
-              margin: 0 0 8px;
-              font-size: 22px;
-            }
-
-            .meta {
-              display: grid;
-              grid-template-columns: repeat(2, minmax(260px, 1fr));
-              gap: 10px 20px;
-              margin-bottom: 22px;
-            }
-
-            .meta-item {
-              background: #f9fafb;
-              border: 1px solid #e5e7eb;
-              border-radius: 12px;
-              padding: 12px 14px;
-              font-size: 14px;
-            }
-
-            .meta-item b {
-              display: inline-block;
-              min-width: 130px;
-            }
-
-            .table-wrap {
-              overflow-x: auto;
-              border: 1px solid #d1d5db;
-              border-radius: 14px;
-            }
-
-            table {
-              width: max-content;
-              min-width: 100%;
-              border-collapse: collapse;
-            }
-
-            thead th {
-              background: #111827;
-              color: white;
-              padding: 10px 8px;
-              font-size: 13px;
-              text-align: center;
-              border: 1px solid #374151;
-              white-space: nowrap;
-            }
-
-            tbody td {
-              border: 1px solid #d1d5db;
-              padding: 8px 8px;
-              font-size: 13px;
-              white-space: nowrap;
-            }
-
-            tbody tr:nth-child(even) {
-              background: #f9fafb;
-            }
-
-            .center {
-              text-align: center;
-            }
-
-          .day-col {
-    min-width: 26px;
-    width: 26px;
+// Peta per siswa per hari: { datang, pulang, status }
+const attendanceMap = {};
+attendanceRows.forEach((row) => {
+  const day = new Date(row.attendance_date).getDate();
+  if (!attendanceMap[row.student_id]) attendanceMap[row.student_id] = {};
+  if (!attendanceMap[row.student_id][day]) attendanceMap[row.student_id][day] = { datang: "", pulang: "", status: "" };
+  const t = String(row.attendance_time || "").slice(0, 5);
+  if (row.status === "pulang") {
+    attendanceMap[row.student_id][day].pulang = t;
+  } else {
+    attendanceMap[row.student_id][day].datang = t;
+    attendanceMap[row.student_id][day].status = row.status;
   }
+});
 
-            .total-hadir,
-            .total-terlambat,
-            .total-sangat-terlambat {
-              font-weight: bold;
-            }
-
-            .sticky-col-1 { min-width: 52px; }
-            .sticky-col-2 { min-width: 90px; }
-            .sticky-col-3 { min-width: 110px; }
-            .sticky-col-4 { min-width: 220px; }
-            .sticky-col-5 { min-width: 90px; }
-
-            .legend {
-              display: flex;
-              gap: 18px;
-              flex-wrap: wrap;
-              margin-top: 16px;
-              font-size: 14px;
-            }
-
-            .legend span {
-              display: inline-flex;
-              align-items: center;
-              gap: 8px;
-              background: #f9fafb;
-              border: 1px solid #e5e7eb;
-              border-radius: 999px;
-              padding: 8px 12px;
-            }
-
-            .summary {
-              display: grid;
-              grid-template-columns: repeat(3, 1fr);
-              gap: 14px;
-              margin-top: 22px;
-            }
-
-            .summary-card {
-              border-radius: 14px;
-              padding: 16px;
-              color: white;
-              text-align: center;
-              font-weight: bold;
-            }
-
-            .hadir {
-              background: linear-gradient(135deg, #16a34a, #22c55e);
-            }
-
-            .terlambat {
-              background: linear-gradient(135deg, #d97706, #f59e0b);
-            }
-
-            .sangat-terlambat {
-              background: linear-gradient(135deg, #dc2626, #ef4444);
-            }
-
-            .ttd {
-              margin-top: 40px;
-              display: flex;
-              justify-content: space-between;
-              gap: 40px;
-            }
-
-            .ttd-box {
-              width: 280px;
-              text-align: center;
-              font-size: 14px;
-            }
-
-            .ttd-space {
-              height: 70px;
-            }
-  @page {
-    size: A4 portrait;
-    margin: 10mm;
+const rows = students.map((student, index) => {
+  let totalHadir = 0, totalTerlambat = 0, totalSangatTerlambat = 0;
+  const daily = {};
+  for (let day = 1; day <= daysInMonth; day++) {
+    const d = attendanceMap[student.student_id]?.[day] || { datang: "", pulang: "", status: "" };
+    daily[day] = d;
+    if (d.status === "hadir") totalHadir++;
+    else if (d.status === "terlambat") totalTerlambat++;
+    else if (d.status === "sangat terlambat") totalSangatTerlambat++;
   }
+  return { no: index + 1, nis: student.nis || "", nisn: student.nisn || "", student_name: student.student_name || "", gender: student.gender || "", daily, totalHadir, totalTerlambat, totalSangatTerlambat };
+});
 
+const safeTanggalCetak = tanggalCetak || new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
+const dayHeadersHtml = Array.from({ length: daysInMonth }, (_, i) => `<th class="center day-col">${i + 1}</th>`).join("");
+
+// ✅ 1 siswa = 2 baris dalam 1 tbody (agar tidak terpotong antar halaman)
+const tableRowsHtml = rows.map((row) => {
+  const masukCells = Array.from({ length: daysInMonth }, (_, i) => {
+    const d = row.daily[i + 1];
+    const cls = d.status === "terlambat" ? "t" : d.status === "sangat terlambat" ? "st" : "";
+    return `<td class="center day-col ${cls}">${d.datang}</td>`;
+  }).join("");
+  const pulangCells = Array.from({ length: daysInMonth }, (_, i) => {
+    const d = row.daily[i + 1];
+    return `<td class="center day-col">${d.pulang}</td>`;
+  }).join("");
+  return `
+    <tbody>
+      <tr class="row-masuk">
+        <td rowspan="2" class="center">${row.no}</td>
+        <td rowspan="2" class="center">${row.nis}</td>
+        <td rowspan="2" class="center">${row.nisn}</td>
+        <td rowspan="2" class="name">${row.student_name}</td>
+        <td rowspan="2" class="center">${row.gender}</td>
+        ${masukCells}
+        <td rowspan="2" class="center total-hadir">${row.totalHadir}</td>
+        <td rowspan="2" class="center total-terlambat">${row.totalTerlambat}</td>
+        <td rowspan="2" class="center total-sangat-terlambat">${row.totalSangatTerlambat}</td>
+      </tr>
+      <tr class="row-pulang">${pulangCells}</tr>
+    </tbody>`;
+}).join("");
+
+const html = `
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Rekap Absensi ${classId} - ${monthName} ${year}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: Arial, sans-serif; background: #f3f4f6; margin: 0; padding: 20px; color: #111827; }
+  .page { max-width: 1500px; margin: 0 auto; background: #fff; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,.08); padding: 24px; }
+  .print-bar { display: flex; justify-content: flex-end; margin-bottom: 14px; }
+  .print-btn { background: #2563eb; color: #fff; border: none; border-radius: 10px; padding: 10px 16px; cursor: pointer; font-weight: bold; }
+  .kop { display: flex; align-items: center; gap: 16px; border-bottom: 3px solid #111827; padding-bottom: 14px; margin-bottom: 18px; }
+  .logo { width: 70px; height: 70px; flex-shrink: 0; }
+  .logo img { width: 100%; height: 100%; object-fit: contain; }
+  .kop-text h1 { margin: 0; font-size: 24px; }
+  .kop-text h2 { margin: 4px 0 0; font-size: 16px; color: #374151; }
+  .kop-text p { margin: 4px 0 0; color: #6b7280; font-size: 12px; }
+  .meta { display: grid; grid-template-columns: repeat(3, minmax(200px,1fr)); gap: 8px 16px; margin-bottom: 16px; }
+  .meta-item { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px; padding: 8px 12px; font-size: 12px; }
+  .meta-item b { display: inline-block; min-width: 110px; }
+  .table-wrap { overflow-x: auto; border: 1px solid #d1d5db; border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; }
+  thead th { background: #111827; color: #fff; padding: 7px 4px; font-size: 12px; text-align: center; border: 1px solid #374151; white-space: nowrap; }
+  tbody td { border: 1px solid #d1d5db; padding: 5px 4px; font-size: 11px; white-space: nowrap; }
+  .center { text-align: center; }
+  .name { text-align: left; min-width: 150px; }
+  .day-col { min-width: 30px; }
+  tr.row-pulang td { background: #f3f4f6; color: #4b5563; }
+  td.t { color: #b45309; font-weight: bold; }
+  td.st { color: #b91c1c; font-weight: bold; }
+  .total-hadir, .total-terlambat, .total-sangat-terlambat { font-weight: bold; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 12px; font-size: 12px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 999px; padding: 6px 12px; }
+  .summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 16px; }
+  .summary-card { border-radius: 12px; padding: 12px; color: #fff; text-align: center; font-weight: bold; }
+  .hadir { background: linear-gradient(135deg,#16a34a,#22c55e); }
+  .terlambat { background: linear-gradient(135deg,#d97706,#f59e0b); }
+  .sangat-terlambat { background: linear-gradient(135deg,#dc2626,#ef4444); }
+  .ttd { margin-top: 30px; display: flex; justify-content: space-between; gap: 40px; }
+  .ttd-box { width: 260px; text-align: center; font-size: 12px; }
+  .ttd-space { height: 60px; }
+  @page { size: A4 landscape; margin: 8mm; }
   @media print {
-    html, body {
-      width: 100%;
-      height: auto;
-      background: white;
-      padding: 0;
-      margin: 0;
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
-      .logo {
-    width: 52px;
-    height: 52px;
+    html, body { width: 100%; height: auto; background: #fff; padding: 0; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    body { font-size: 9px; }
+    .page { box-shadow: none; border-radius: 0; max-width: 100%; width: 100%; padding: 0; }
+    .print-bar { display: none; }
+    .kop { margin-bottom: 10px; padding-bottom: 8px; }
+    .logo { width: 46px; height: 46px; }
+    .kop-text h1 { font-size: 16px; }
+    .kop-text h2 { font-size: 11px; }
+    .kop-text p { font-size: 8px; }
+    .meta { gap: 4px 8px; margin-bottom: 10px; }
+    .meta-item { padding: 5px 8px; font-size: 8px; }
+    .table-wrap { overflow: visible; border: none; }
+    thead { display: table-header-group; }   /* ✅ header kolom berulang di tiap halaman */
+    tbody { display: table-row-group; page-break-inside: avoid; }  /* ✅ 2 baris siswa tidak terpotong */
+    thead th { font-size: 8px; padding: 3px 1px; }
+    tbody td { font-size: 8px; padding: 3px 1px; }
+    .day-col { width: 24px; min-width: 24px; }
+    .name { min-width: 110px; }
+    .legend { font-size: 8px; margin-top: 8px; }
+    .summary { gap: 8px; margin-top: 10px; }
+    .summary-card { padding: 8px; font-size: 9px; }
+    .summary-card div:last-child { font-size: 14px !important; margin-top: 2px !important; }
+    .ttd { margin-top: 16px; }
+    .ttd-box { width: 200px; font-size: 9px; }
+    .ttd-space { height: 40px; }
   }
-
-  .logo img {
-    width: 100%;
-    height: 100%;
-  }
-    }
-
-    body {
-      font-size: 9px;
-    }
-
-    .page {
-      box-shadow: none;
-      border-radius: 0;
-      max-width: 100%;
-      width: 100%;
-      padding: 0;
-      margin: 0;
-    }
-
-    .print-bar {
-      display: none;
-    }
-
-    .kop {
-      margin-bottom: 12px;
-      padding-bottom: 10px;
-    }
-
-    .logo {
-      width: 52px;
-      height: 52px;
-      font-size: 18px;
-      border-radius: 8px;
-    }
-
-    .kop-text h1 {
-      font-size: 18px;
-    }
-
-    .kop-text h2 {
-      font-size: 12px;
-    }
-
-    .kop-text p {
-      font-size: 10px;
-    }
-
-    .title-box {
-      margin: 10px 0 12px;
-      padding: 10px 12px;
-    }
-
-    .title-box h3 {
-      font-size: 15px;
-      margin-bottom: 4px;
-    }
-
-    .meta {
-      gap: 6px 10px;
-      margin-bottom: 12px;
-    }
-
-    .meta-item {
-      padding: 8px 10px;
-      font-size: 10px;
-      border-radius: 8px;
-    }
-
-    .table-wrap {
-      overflow: visible;
-      border: none;
-    }
-
-    table {
-      width: 100%;
-      min-width: 100%;
-      table-layout: fixed;
-    }
-
-    thead th {
-    font-size: 8px;
-    padding: 3px 1px;
-    line-height: 1.1;
-  }
-
-  tbody td {
-    font-size: 8px;
-    padding: 2px 1px;
-    line-height: 1.1;
-  }
-
-    .day-col {
-    width: 18px;
-    min-width: 18px;
-    max-width: 18px;
-    padding: 2px 1px !important;
-  }
-
-  .sticky-col-1 {
-    width: 24px;
-    min-width: 24px;
-  }
-
-  .sticky-col-2 {
-    width: 50px;
-    min-width: 50px;
-  }
-
-  .sticky-col-3 {
-    width: 62px;
-    min-width: 62px;
-  }
-
-  .sticky-col-4 {
-    width: 120px;
-    min-width: 120px;
-  }
-
-  .sticky-col-5 {
-    width: 34px;
-    min-width: 34px;
-  }
-
-    .total-hadir,
-    .total-terlambat,
-    .total-sangat-terlambat {
-      width: 34px;
-      min-width: 34px;
-      max-width: 34px;
-    }
-
-    .legend {
-      margin-top: 10px;
-      gap: 8px;
-      font-size: 9px;
-    }
-
-    .legend span {
-      padding: 4px 8px;
-      border-radius: 999px;
-    }
-
-    .summary {
-      gap: 8px;
-      margin-top: 12px;
-    }
-
-    .summary-card {
-      padding: 10px;
-      font-size: 10px;
-      border-radius: 8px;
-    }
-
-    .summary-card div:last-child {
-      font-size: 16px !important;
-      margin-top: 4px !important;
-    }
-
-          .ttd {
-            margin-top: 20px;
-            display: flex;
-            justify-content: space-between;
-            gap: 20px;
-          }
-
-          .ttd-box {
-            width: 220px;
-            font-size: 10px;
-          }
-
-          .ttd-space {
-            height: 42px;
-          }
-  }
-          </style>
-        </head>
-        <body>
-          <div class="page">
-            <div class="print-bar">
-              <button class="print-btn" onclick="window.print()">Cetak / Simpan PDF</button>
-            </div>
-
-            <div class="kop">
-              <div class="logo">
-                <img src="/public/logo-man2.png" alt="Logo MAN 2" />
-              </div>
-              <div class="kop-text">
-                <h1>MAN 2 PALEMBANG</h1>
-                <h2>REKAP ABSENSI SISWA PER KELAS</h2>
-                <p>Jl. Prof. KH. Zainal Abidin Fikri, Komplek UIN Raden Fatah, Pahlawan, Kec. Kemuning, Kota Palembang, Sumatera Selatan 30126</p>
-              </div>
-            </div>
-
-            <div class="title-box">
-              <h3>Rekap Bulanan Kelas ${classId}</h3>
-              <div>Bulan: <b>${monthName} ${year}</b></div>
-            </div>
-
-            <div class="meta">
-              <div class="meta-item"><b>Kelas</b>: ${classId}</div>
-              <div class="meta-item"><b>Semester</b>: ${semester}</div>
-              <div class="meta-item"><b>Tahun Pelajaran</b>: ${tahunPelajaran}</div>
-              <div class="meta-item"><b>Wali Kelas</b>: ${waliKelas}</div>
-              <div class="meta-item"><b>Tempat Cetak</b>: ${tempat}</div>
-              <div class="meta-item"><b>Tanggal Cetak</b>: ${safeTanggalCetak}</div>
-            </div>
-
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th rowspan="2" class="sticky-col-1">No</th>
-                    <th rowspan="2" class="sticky-col-2">NIS</th>
-                    <th rowspan="2" class="sticky-col-3">NISN</th>
-                    <th rowspan="2" class="sticky-col-4">Nama</th>
-                    <th rowspan="2" class="sticky-col-5">JK</th>
-                    <th colspan="${daysInMonth}">Bulan ${monthName}</th>
-                  <th rowspan="2">H</th>
-                    <th rowspan="2">T</th>
-                  <th rowspan="2">ST</th>
-                  </tr>
-                  <tr>
-                    ${dayHeadersHtml}
-                  </tr>
-                </thead>
-                <tbody>
-                  ${
-                    tableRowsHtml ||
-                    `
-                    <tr>
-                      <td colspan="${5 + daysInMonth + 3}" class="center">Tidak ada data siswa pada kelas ini.</td>
-                    </tr>
-                  `
-                  }
-                </tbody>
-              </table>
-            </div>
-
-            <div class="legend">
-              <span><b>JK</b> = Jenis Kelamin</span>
-              <span><b>H</b> = Hadir</span>
-              <span><b>T</b> = Terlambat</span>
-              <span><b>ST</b> = Sangat Terlambat</span>
-            </div>
-
-            <div class="summary">
-              <div class="summary-card hadir">
-                <div>Total Hadir</div>
-                <div style="font-size:28px; margin-top:8px;">
-                  ${rows.reduce((sum, row) => sum + row.totalHadir, 0)}
-                </div>
-              </div>
-              <div class="summary-card terlambat">
-                <div>Total Terlambat</div>
-                <div style="font-size:28px; margin-top:8px;">
-                  ${rows.reduce((sum, row) => sum + row.totalTerlambat, 0)}
-                </div>
-              </div>
-              <div class="summary-card sangat-terlambat">
-                <div>Total Sangat Terlambat</div>
-                <div style="font-size:28px; margin-top:8px;">
-                  ${rows.reduce((sum, row) => sum + row.totalSangatTerlambat, 0)}
-                </div>
-              </div>
-            </div>
-
-            <div class="ttd">
-            <div class="ttd-box">
-              <div>Mengetahui,</div>
-              <div>Kepala Madrasah</div>
-              <div class="ttd-space"></div>
-              <div><b>${kepalaMadrasah}</b></div>
-              <div>NIP. ${nipKepalaMadrasah}</div>
-            </div>
-
-            <div class="ttd-box">
-              <div>${tempat}, ${safeTanggalCetak}</div>
-              <div>Wali Kelas</div>
-              <div class="ttd-space"></div>
-              <div><b>${waliKelas}</b></div>
-              <div>NIP. ${nipWaliKelas}</div>
-            </div>
-          </div>
-          </div>
-        </body>
-        </html>
-      `;
-
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.send(html);
-  } catch (error) {
-    console.error("EXPORT REPORT ERROR:", error);
-    res.status(500).send("Gagal membuat laporan");
-  }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="print-bar"><button class="print-btn" onclick="window.print()">Cetak / Simpan PDF</button></div>
+  <div class="kop">
+    <div class="logo"><img src="/public/logo-man2.png" alt="Logo MAN 2" /></div>
+    <div class="kop-text">
+      <h1>MAN 2 PALEMBANG</h1>
+      <h2>REKAP ABSENSI SISWA PER KELAS (JAM MASUK & PULANG)</h2>
+      <p>Jl. Prof. KH. Zainal Abidin Fikri, Komplek UIN Raden Fatah, Pahlawan, Kec. Kemuning, Kota Palembang, Sumatera Selatan 30126</p>
+    </div>
+  </div>
+  <div class="meta">
+    <div class="meta-item"><b>Kelas</b>: ${classId}</div>
+    <div class="meta-item"><b>Semester</b>: ${semester}</div>
+    <div class="meta-item"><b>Tahun Pelajaran</b>: ${tahunPelajaran}</div>
+    <div class="meta-item"><b>Wali Kelas</b>: ${waliKelas}</div>
+    <div class="meta-item"><b>Tempat Cetak</b>: ${tempat}</div>
+    <div class="meta-item"><b>Tanggal Cetak</b>: ${safeTanggalCetak}</div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th rowspan="2">No</th>
+          <th rowspan="2">NIS</th>
+          <th rowspan="2">NISN</th>
+          <th rowspan="2">Nama</th>
+          <th rowspan="2">JK</th>
+          <th colspan="${daysInMonth}">Bulan ${monthName} ${year}</th>
+          <th rowspan="2">H</th>
+          <th rowspan="2">T</th>
+          <th rowspan="2">ST</th>
+        </tr>
+        <tr>${dayHeadersHtml}</tr>
+      </thead>
+      ${tableRowsHtml || `<tbody><tr><td colspan="${5 + daysInMonth + 3}" class="center">Tidak ada data siswa pada kelas ini.</td></tr></tbody>`}
+    </table>
+  </div>
+  <div class="legend">
+    <span><b>Baris putih</b> = jam masuk</span>
+    <span><b>Baris abu-abu</b> = jam pulang</span>
+    <span style="color:#b45309;"><b>Oranye</b> = terlambat</span>
+    <span style="color:#b91c1c;"><b>Merah</b> = sangat terlambat</span>
+    <span><b>H/T/ST</b> = total hadir / terlambat / sangat terlambat</span>
+  </div>
+  <div class="summary">
+    <div class="summary-card hadir"><div>Total Hadir</div><div style="font-size:26px;margin-top:6px;">${rows.reduce((s, r) => s + r.totalHadir, 0)}</div></div>
+    <div class="summary-card terlambat"><div>Total Terlambat</div><div style="font-size:26px;margin-top:6px;">${rows.reduce((s, r) => s + r.totalTerlambat, 0)}</div></div>
+    <div class="summary-card sangat-terlambat"><div>Total Sangat Terlambat</div><div style="font-size:26px;margin-top:6px;">${rows.reduce((s, r) => s + r.totalSangatTerlambat, 0)}</div></div>
+  </div>
+  <div class="ttd">
+    <div class="ttd-box">
+      <div>Mengetahui,</div>
+      <div>Kepala Madrasah</div>
+      <div class="ttd-space"></div>
+      <div><b>${kepalaMadrasah}</b></div>
+      <div>NIP. ${nipKepalaMadrasah}</div>
+    </div>
+    <div class="ttd-box">
+      <div>${tempat}, ${safeTanggalCetak}</div>
+      <div>Wali Kelas</div>
+      <div class="ttd-space"></div>
+      <div><b>${waliKelas}</b></div>
+      <div>NIP. ${nipWaliKelas}</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>`;
+res.setHeader("Content-Type", "text/html; charset=utf-8");
+res.send(html);
+} catch (error) {
+console.error("EXPORT REPORT ERROR:", error);
+res.status(500).send("Gagal membuat laporan");
+}
 });
 app.get("/api/teacher/:teacherId/profile", async (req, res) => {
   try {
@@ -4353,6 +3893,121 @@ app.post("/api/monitoring/notify", async (req, res) => {
   } catch (error) {
     console.error("MANUAL NOTIFY ERROR:", error);
     res.status(500).json({ success: false, message: "Gagal mengirim notifikasi", error: error.message });
+  }
+});
+
+// ============ RESET PASSWORD MASSAL (SISWA & GURU) ============
+app.post("/api/students/reset-passwords", verifyAdminApiKey, async (req, res) => {
+  try {
+    const { ids = [], password = "" } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ success: false, message: "Pilih minimal 1 siswa" });
+    }
+    const newPass = String(password || "").trim() || "default12345";
+    const hashed = await bcrypt.hash(newPass, 10);
+    const [result] = await pool.query(
+      "UPDATE students SET password = ? WHERE student_id IN (?)",
+      [hashed, ids]
+    );
+    res.json({ success: true, message: `Password ${result.affectedRows} siswa diubah menjadi "${newPass}".`, changed: result.affectedRows });
+  } catch (error) {
+    console.error("BULK RESET STUDENT PASSWORD ERROR:", error);
+    res.status(500).json({ success: false, message: "Gagal reset password siswa", error: error.message });
+  }
+});
+
+app.post("/api/teachers/reset-passwords", verifyAdminApiKey, async (req, res) => {
+  try {
+    const { ids = [], password = "" } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ success: false, message: "Pilih minimal 1 guru" });
+    }
+    const newPass = String(password || "").trim() || "default12345";
+    const hashed = await bcrypt.hash(newPass, 10);
+    const [result] = await pool.query(
+      "UPDATE teachers SET password = ? WHERE teacher_id IN (?)",
+      [hashed, ids]
+    );
+    res.json({ success: true, message: `Password ${result.affectedRows} guru diubah menjadi "${newPass}".`, changed: result.affectedRows });
+  } catch (error) {
+    console.error("BULK RESET TEACHER PASSWORD ERROR:", error);
+    res.status(500).json({ success: false, message: "Gagal reset password guru", error: error.message });
+  }
+});
+
+// ============ GENERATE QR CODE MASSAL ============
+app.post("/api/students/generate-qr-bulk", verifyAdminApiKey, async (req, res) => {
+  try {
+    const { ids = [] } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ success: false, message: "Pilih minimal 1 siswa" });
+    }
+    let ok = 0, fail = 0;
+    for (const id of ids) {
+      try {
+        const cleanId = String(id).trim();
+        if (!cleanId) { fail++; continue; }
+        const qrDataUrl = await QRCode.toDataURL(cleanId);
+        await pool.query("UPDATE students SET qr_code = ? WHERE student_id = ?", [qrDataUrl, cleanId]);
+        ok++;
+      } catch (e) {
+        fail++;
+      }
+    }
+    res.json({ success: true, message: `QR Code berhasil dibuat untuk ${ok} siswa${fail ? `, gagal ${fail}` : ""}.`, ok, fail });
+  } catch (error) {
+    console.error("BULK QR ERROR:", error);
+    res.status(500).json({ success: false, message: "Gagal generate QR massal", error: error.message });
+  }
+});
+// ============ PROFIL SISWA: UPDATE TERBATAS + LOG ============
+app.put("/api/student/:studentId/profile", async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    // Kolom yang BOLEH diubah siswa (4 kolom kunci TIDAK ada di sini)
+    const ALLOWED = ["student_name","gender","birth_place","birth_date","address","religion","parent_name","parent_email","parent_relation"];
+    const [rows] = await pool.query("SELECT * FROM students WHERE student_id = ? LIMIT 1", [studentId]);
+    if (!rows.length) return res.status(404).json({ success: false, message: "Siswa tidak ditemukan" });
+    const current = rows[0];
+    const sets = []; const values = []; const changes = [];
+    for (const key of ALLOWED) {
+      if (req.body[key] === undefined) continue;
+      const newVal = String(req.body[key] ?? "").trim();
+      const oldVal = String(current[key] ?? "").trim();
+      if (newVal !== oldVal) {
+        sets.push(`${key} = ?`);
+        values.push(newVal || null);
+        changes.push({ field: key, old: oldVal || "-", new: newVal || "-" });
+      }
+    }
+    if (!sets.length) return res.json({ success: true, message: "Tidak ada perubahan data.", changes: 0 });
+    values.push(studentId);
+    await pool.query(`UPDATE students SET ${sets.join(", ")} WHERE student_id = ?`, values);
+    await logStudentActivity(studentId, "update_profile", changes, req);
+    res.json({ success: true, message: "Profil berhasil diperbarui.", changes: changes.length });
+  } catch (error) {
+    console.error("UPDATE STUDENT PROFILE ERROR:", error);
+    res.status(500).json({ success: false, message: "Gagal memperbarui profil", error: error.message });
+  }
+});
+
+// ============ ADMIN: LIHAT LOG PER SISWA ============
+app.get("/api/admin/student-logs", verifyAdminApiKey, async (req, res) => {
+  try {
+    const { studentId = "", limit = "200" } = req.query;
+    const conditions = []; const values = [];
+    if (studentId) { conditions.push("student_id = ?"); values.push(studentId); }
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const safeLimit = Math.min(Number(limit) || 200, 500);
+    const [rows] = await pool.query(
+      `SELECT log_id, student_id, action, field_name, old_value, new_value, ip_address, created_at
+       FROM student_logs ${where} ORDER BY created_at DESC LIMIT ${safeLimit}`,
+      values
+    );
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    console.error("GET STUDENT LOGS ERROR:", error);
+    res.status(500).json({ success: false, message: "Gagal mengambil log", error: error.message });
   }
 });
 app.use(express.static(path.join(__dirname, "dist")));
