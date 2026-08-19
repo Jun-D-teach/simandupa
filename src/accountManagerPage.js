@@ -3,6 +3,11 @@ import { API_URL } from "./config";
 let _tab = "students";
 let _students = [];
 let _teachers = [];
+let _search = "";
+let _filterClass = "";
+let _filterRole = "";
+let _sortKey = "name";
+let _sortDir = 1;
 
 export function initAccountManagerPage() {
   injectAMStyles();
@@ -16,13 +21,16 @@ export function initAccountManagerPage() {
         <button id="amTabTeachers" class="am-btn">👨‍🏫 Guru</button>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input id="amSearch" class="am-input" style="min-width:200px;" placeholder="🔍 Cari nama / ID / NISN / username..." />
+        <select id="amFilterClass" class="am-input"><option value="">Semua Kelas</option></select>
+        <select id="amFilterRole" class="am-input" style="display:none;"><option value="">Semua Role</option></select>
         <input id="amNewPassword" class="am-input" placeholder="Password baru (kosong = default12345)" />
         <button id="amBulkReset" class="am-btn am-warn">🔑 Reset Password Terpilih</button>
         <button id="amBulkQr" class="am-btn am-ok">📱 Generate QR Terpilih</button>
         <button id="amReload" class="am-btn">🔄 Muat Ulang</button>
       </div>
     </div>
-    <div class="am-note">ℹ️ Password tersimpan <b>terenkripsi (bcrypt)</b> sehingga tidak dapat dilihat — hanya bisa <b>diganti/reset</b>. Setelah reset, bagikan password baru ke orang bersangkutan.</div>
+    <div class="am-note">ℹ️ Klik judul kolom (⇅) untuk mengurutkan ▲/▼. Password terenkripsi — hanya bisa di-reset.</div>
     <div id="amSummary" class="am-summary"></div>
     <div id="amTable" class="am-table-wrap">Memuat data...</div>
   `;
@@ -32,6 +40,9 @@ export function initAccountManagerPage() {
   document.getElementById("amReload").addEventListener("click", () => loadData());
   document.getElementById("amBulkReset").addEventListener("click", bulkReset);
   document.getElementById("amBulkQr").addEventListener("click", bulkQr);
+  document.getElementById("amSearch").addEventListener("input", (e) => { _search = e.target.value.trim(); renderTable(); });
+  document.getElementById("amFilterClass").addEventListener("change", (e) => { _filterClass = e.target.value; renderTable(); });
+  document.getElementById("amFilterRole").addEventListener("change", (e) => { _filterRole = e.target.value; renderTable(); });
 
   box.addEventListener("change", (e) => {
     if (e.target.id === "amCheckAll") {
@@ -39,22 +50,31 @@ export function initAccountManagerPage() {
     }
   });
 
+  // Klik judul kolom => urutkan
+  box.addEventListener("click", (e) => {
+    const th = e.target.closest("[data-sort]");
+    if (!th) return;
+    const key = th.dataset.sort;
+    if (_sortKey === key) { _sortDir *= -1; } else { _sortKey = key; _sortDir = 1; }
+    renderTable();
+  });
+
+  // Tombol aksi per baris
   box.addEventListener("click", async (e) => {
     const btn = e.target.closest("[data-am-action]");
     if (!btn) return;
-    const { id, name, amAction } = btn.dataset;
+    const id = btn.dataset.id;
+    const name = btn.dataset.name;
+    const amAction = btn.dataset.amAction;
     if (amAction === "reset") {
-      const pass = prompt(`Password baru untuk ${name} (kosongkan = default12345):`, "");
+      const pass = prompt("Password baru untuk " + name + " (kosongkan = default12345):", "");
       if (pass === null) return;
       await callReset([id], pass);
     }
-        if (amAction === "logs") {
-      showStudentLogs(id, name);
-      return;
-    }
+    if (amAction === "logs") { showStudentLogs(id, name); return; }
     if (amAction === "qr") {
       btn.disabled = true;
-      const r = await postJson(`${API_URL}/api/students/generate-qr-bulk`, { ids: [id] });
+      const r = await postJson(API_URL + "/api/students/generate-qr-bulk", { ids: [id] });
       btn.disabled = false;
       alert(r.success ? "✅ " + r.message : "❌ " + r.message);
       loadData();
@@ -80,27 +100,41 @@ async function loadData() {
   wrap.innerHTML = "Memuat data...";
   try {
     const [rs, rt] = await Promise.all([
-      fetch(`${API_URL}/api/students`, { headers: adminHeaders(false) }).then((r) => r.json()),
-      fetch(`${API_URL}/api/teachers`, { headers: adminHeaders(false) }).then((r) => r.json()),
+      fetch(API_URL + "/api/students", { headers: adminHeaders(false) }).then((r) => r.json()),
+      fetch(API_URL + "/api/teachers", { headers: adminHeaders(false) }).then((r) => r.json()),
     ]);
     _students = rs.data || [];
     _teachers = rt.data || [];
     renderSummary();
+    fillFilterOptions();
     renderTable();
   } catch (err) {
-    wrap.innerHTML = `<div class="am-alert">❌ Gagal memuat data: ${esc(err.message)}</div>`;
+    wrap.innerHTML = '<div class="am-alert">❌ Gagal memuat data: ' + esc(err.message) + "</div>";
   }
+}
+
+function fillFilterOptions() {
+  const selClass = document.getElementById("amFilterClass");
+  const curC = selClass.value;
+  const classes = [...new Set(_students.map((s) => s.class_id).filter(Boolean))].sort();
+  selClass.innerHTML = '<option value="">Semua Kelas</option>' + classes.map((c) => '<option value="' + esc(c) + '">' + esc(c) + "</option>").join("");
+  if (classes.includes(curC)) selClass.value = curC;
+
+  const selRole = document.getElementById("amFilterRole");
+  const curR = selRole.value;
+  const roles = [...new Set(_teachers.flatMap((t) => String(t.roles || "").split(",")).map((r) => r.trim()).filter(Boolean))].sort();
+  selRole.innerHTML = '<option value="">Semua Role</option>' + roles.map((r) => '<option value="' + esc(r) + '">' + esc(r) + "</option>").join("");
+  if (roles.includes(curR)) selRole.value = curR;
 }
 
 function renderSummary() {
   const qrBelum = _students.filter((s) => !s.qr_code).length;
   const noUser = _students.filter((s) => !s.username).length + _teachers.filter((t) => !t.username).length;
-  document.getElementById("amSummary").innerHTML = `
-    <div class="am-card" style="background:#e0f2fe;"><b>Total Siswa</b><span>${_students.length}</span></div>
-    <div class="am-card" style="background:#dcfce7;"><b>Total Guru</b><span>${_teachers.length}</span></div>
-    <div class="am-card" style="background:#fef9c3;"><b>QR Belum Ada</b><span>${qrBelum}</span></div>
-    <div class="am-card" style="background:#fee2e2;"><b>Username Kosong</b><span>${noUser}</span></div>
-  `;
+  document.getElementById("amSummary").innerHTML =
+    '<div class="am-card" style="background:#e0f2fe;"><b>Total Siswa</b><span>' + _students.length + "</span></div>" +
+    '<div class="am-card" style="background:#dcfce7;"><b>Total Guru</b><span>' + _teachers.length + "</span></div>" +
+    '<div class="am-card" style="background:#fef9c3;"><b>QR Belum Ada</b><span>' + qrBelum + "</span></div>" +
+    '<div class="am-card" style="background:#fee2e2;"><b>Username Kosong</b><span>' + noUser + "</span></div>";
 }
 
 function setActiveTab() {
@@ -113,43 +147,97 @@ function getSelected() {
   return [...document.querySelectorAll(".am-check:checked")].map((c) => c.dataset.id);
 }
 
+function thSort(key, label) {
+  const arrow = _sortKey === key ? (_sortDir === 1 ? " ▲" : " ▼") : " ⇅";
+  return '<th class="am-th-sort" data-sort="' + key + '" style="cursor:pointer;">' + label + arrow + "</th>";
+}
+
+function getFilteredRows() {
+  const q = _search.toLowerCase();
+  let rows = _tab === "students" ? _students : _teachers;
+  rows = rows.filter((r) => {
+    if (_tab === "students") {
+      const matchQ = !q || [r.student_id, r.student_name, r.nis, r.nisn, r.username].some((v) => String(v || "").toLowerCase().includes(q));
+      const matchC = !_filterClass || r.class_id === _filterClass;
+      return matchQ && matchC;
+    }
+    const matchQ = !q || [r.teacher_id, r.teacher_name, r.nip, r.username, r.email].some((v) => String(v || "").toLowerCase().includes(q));
+    const matchR = !_filterRole || String(r.roles || "").split(",").map((x) => x.trim()).includes(_filterRole);
+    return matchQ && matchR;
+  });
+  const keyFn = (r) => {
+    if (_sortKey === "id") return String(_tab === "students" ? r.student_id : r.teacher_id || "").toLowerCase();
+    if (_sortKey === "col") return String(_tab === "students" ? r.class_id : r.nip || "").toLowerCase();
+    if (_sortKey === "username") return String(r.username || "").toLowerCase();
+    return String(_tab === "students" ? r.student_name : r.teacher_name || "").toLowerCase();
+  };
+  return [...rows].sort((a, b) => {
+    const av = keyFn(a), bv = keyFn(b);
+    if (av < bv) return -1 * _sortDir;
+    if (av > bv) return 1 * _sortDir;
+    return 0;
+  });
+}
+
 function renderTable() {
   const wrap = document.getElementById("amTable");
-  const rows = _tab === "students" ? _students : _teachers;
-  if (!rows.length) { wrap.innerHTML = `<div class="am-empty">Tidak ada data.</div>`; return; }
-  wrap.innerHTML = `
-    <table class="am-table">
-      <thead><tr>
-        <th><input type="checkbox" id="amCheckAll" /></th>
-        <th>ID</th><th>Nama</th><th>${_tab === "students" ? "Kelas" : "NIP"}</th>
-        <th>Username</th><th>Password</th>${_tab === "students" ? "<th>QR</th>" : ""}<th>Aksi</th>
-      </tr></thead>
-      <tbody>
-        ${rows.map((r) => {
-          const id = _tab === "students" ? r.student_id : r.teacher_id;
-          const name = _tab === "students" ? r.student_name : r.teacher_name;
-          const col = _tab === "students" ? (r.class_id || "-") : (r.nip || "-");
-          return `
-          <tr>
-            <td><input type="checkbox" class="am-check" data-id="${esc(id)}" /></td>
-            <td>${esc(id)}</td>
-            <td><b>${esc(name)}</b></td>
-            <td>${esc(col)}</td>
-            <td>${esc(r.username || "❌ belum ada")}</td>
-            <td><span class="am-badge am-lock">🔒 terenkripsi</span></td>
-            ${_tab === "students" ? `<td>${r.qr_code ? `<span class="am-badge am-ok">✅ ada</span>` : `<span class="am-badge am-warn">⚠️ belum</span>`}</td>` : ""}
-            <td>
-              <button class="am-btn am-warn" data-am-action="reset" data-id="${esc(id)}" data-name="${esc(name)}">🔑 Reset</button>
-              ${_tab === "students" ? `<button class="am-btn am-ok" data-am-action="qr" data-id="${esc(id)}" data-name="${esc(name)}">📱 QR</button><button class="am-btn" data-am-action="logs" data-id="${esc(id)}" data-name="${esc(name)}">📜 Log</button>` : ""}
-            </td>
-          </tr>`;
-        }).join("")}
-      </tbody>
-    </table>`;
+  document.getElementById("amFilterClass").style.display = _tab === "students" ? "" : "none";
+  document.getElementById("amFilterRole").style.display = _tab === "teachers" ? "" : "none";
+  const rows = getFilteredRows();
+  const totalAll = _tab === "students" ? _students.length : _teachers.length;
+  if (!rows.length) {
+    wrap.innerHTML = '<div class="am-empty">Tidak ada data yang cocok.</div>';
+    return;
+  }
+  const head =
+    "<thead><tr>" +
+    '<th><input type="checkbox" id="amCheckAll" /></th>' +
+    thSort("id", "ID") +
+    thSort("name", "Nama") +
+    thSort("col", _tab === "students" ? "Kelas" : "NIP") +
+    thSort("username", "Username") +
+    "<th>Password</th>" +
+    (_tab === "students" ? "<th>QR</th>" : "") +
+    "<th>Aksi</th>" +
+    "</tr></thead>";
+  const body =
+    "<tbody>" +
+    rows.map((r) => {
+      const id = _tab === "students" ? r.student_id : r.teacher_id;
+      const name = _tab === "students" ? r.student_name : r.teacher_name;
+      const col = _tab === "students" ? (r.class_id || "-") : (r.nip || "-");
+      const qrCell = _tab === "students"
+        ? "<td>" + (r.qr_code ? '<span class="am-badge am-ok">✅ ada</span>' : '<span class="am-badge am-warn">⚠️ belum</span>') + "</td>"
+        : "";
+      const extraBtns = _tab === "students"
+        ? '<button class="am-btn am-ok" data-am-action="qr" data-id="' + esc(id) + '" data-name="' + esc(name) + '">📱 QR</button>' +
+          '<button class="am-btn" data-am-action="logs" data-id="' + esc(id) + '" data-name="' + esc(name) + '">📜 Log</button>'
+        : "";
+      return (
+        "<tr>" +
+        '<td><input type="checkbox" class="am-check" data-id="' + esc(id) + '" /></td>' +
+        "<td>" + esc(id) + "</td>" +
+        "<td><b>" + esc(name) + "</b></td>" +
+        "<td>" + esc(col) + "</td>" +
+        "<td>" + esc(r.username || "❌ belum ada") + "</td>" +
+        '<td><span class="am-badge am-lock">🔒 terenkripsi</span></td>' +
+        qrCell +
+        "<td>" +
+        '<button class="am-btn am-warn" data-am-action="reset" data-id="' + esc(id) + '" data-name="' + esc(name) + '">🔑 Reset</button>' +
+        extraBtns +
+        "</td></tr>"
+      );
+    }).join("") +
+    "</tbody>";
+  wrap.innerHTML =
+    '<div style="padding:8px 12px;font-size:12px;color:#64748b;">Menampilkan <b>' + rows.length +
+    "</b> dari <b>" + totalAll + "</b> " + (_tab === "students" ? "siswa" : "guru") +
+    ' — klik judul kolom untuk mengurutkan</div>' +
+    '<table class="am-table">' + head + body + "</table>";
 }
 
 async function callReset(ids, password) {
-  const url = _tab === "students" ? `${API_URL}/api/students/reset-passwords` : `${API_URL}/api/teachers/reset-passwords`;
+  const url = _tab === "students" ? API_URL + "/api/students/reset-passwords" : API_URL + "/api/teachers/reset-passwords";
   const r = await postJson(url, { ids, password });
   alert(r.success ? "✅ " + r.message : "❌ " + r.message);
 }
@@ -159,7 +247,7 @@ async function bulkReset() {
   if (!ids.length) return alert("⚠️ Centang minimal 1 baris.");
   const pass = document.getElementById("amNewPassword").value.trim();
   const label = _tab === "students" ? "siswa" : "guru";
-  if (!confirm(`Reset password ${ids.length} ${label} menjadi "${pass || "default12345"}"?`)) return;
+  if (!confirm("Reset password " + ids.length + " " + label + ' menjadi "' + (pass || "default12345") + '"?')) return;
   await callReset(ids, pass);
 }
 
@@ -167,11 +255,13 @@ async function bulkQr() {
   if (_tab !== "students") return alert("ℹ️ Generate QR hanya untuk siswa.");
   const ids = getSelected();
   if (!ids.length) return alert("⚠️ Centang minimal 1 siswa.");
-  if (!confirm(`Generate QR Code untuk ${ids.length} siswa?`)) return;
+  if (!confirm("Generate QR Code untuk " + ids.length + " siswa?")) return;
   const btn = document.getElementById("amBulkQr");
-  btn.disabled = true; btn.textContent = "⏳ Membuat QR...";
-  const r = await postJson(`${API_URL}/api/students/generate-qr-bulk`, { ids });
-  btn.disabled = false; btn.textContent = "📱 Generate QR Terpilih";
+  btn.disabled = true;
+  btn.textContent = "⏳ Membuat QR...";
+  const r = await postJson(API_URL + "/api/students/generate-qr-bulk", { ids });
+  btn.disabled = false;
+  btn.textContent = "📱 Generate QR Terpilih";
   alert(r.success ? "✅ " + r.message : "❌ " + r.message);
   loadData();
 }
@@ -179,58 +269,66 @@ async function bulkQr() {
 function esc(v) {
   return String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
+
 async function showStudentLogs(id, name) {
   try {
-    const res = await fetch(`${API_URL}/api/admin/student-logs?studentId=${encodeURIComponent(id)}&limit=300`, { headers: adminHeaders(false) });
+    const res = await fetch(API_URL + "/api/admin/student-logs?studentId=" + encodeURIComponent(id) + "&limit=300", { headers: adminHeaders(false) });
     const result = await res.json();
     const logs = result.data || [];
     const win = window.open("", "_blank", "width=980,height=640");
     if (!win) return alert("⚠️ Pop-up diblokir browser. Izinkan pop-up untuk melihat log.");
-    win.document.write(`<!DOCTYPE html><html><head><title>Log ${esc(name)}</title><style>
-      body{font-family:Arial,sans-serif;padding:20px;color:#111827;}
-      h2{margin:0 0 4px;} p.sub{margin:0 0 14px;color:#64748b;font-size:13px;}
-      table{border-collapse:collapse;width:100%;} th,td{border:1px solid #d1d5db;padding:6px 8px;font-size:12px;text-align:left;vertical-align:top;}
-      th{background:#0f172a;color:#fff;} tr:nth-child(even){background:#f9fafb;}
-      .act{font-weight:bold;text-transform:uppercase;}
-    </style></head><body>
-      <h2>📜 Log Aktivitas Siswa</h2>
-      <p class="sub"><b>${esc(name)}</b> — ${esc(id)} • ${logs.length} catatan</p>
-      ${logs.length ? `<table><thead><tr><th>Waktu</th><th>Aksi</th><th>Kolom</th><th>Nilai Lama</th><th>Nilai Baru</th><th>IP</th></tr></thead><tbody>
-        ${logs.map((l) => `<tr><td>${esc(l.created_at)}</td><td class="act">${esc(l.action)}</td><td>${esc(l.field_name || "-")}</td><td>${esc(l.old_value || "-")}</td><td>${esc(l.new_value || "-")}</td><td>${esc(l.ip_address || "-")}</td></tr>`).join("")}
-      </tbody></table>` : "<p>Belum ada log untuk siswa ini.</p>"}
-    </body></html>`);
+    let rowsHtml = "";
+    logs.forEach((l) => {
+      rowsHtml += "<tr><td>" + esc(l.created_at) + '</td><td class="act">' + esc(l.action) + "</td><td>" + esc(l.field_name || "-") + "</td><td>" + esc(l.old_value || "-") + "</td><td>" + esc(l.new_value || "-") + "</td><td>" + esc(l.ip_address || "-") + "</td></tr>";
+    });
+    win.document.write(
+      "<!DOCTYPE html><html><head><title>Log " + esc(name) + "</title><style>" +
+      "body{font-family:Arial,sans-serif;padding:20px;color:#111827;}" +
+      "h2{margin:0 0 4px;}p.sub{margin:0 0 14px;color:#64748b;font-size:13px;}" +
+      "table{border-collapse:collapse;width:100%;}th,td{border:1px solid #d1d5db;padding:6px 8px;font-size:12px;text-align:left;vertical-align:top;}" +
+      "th{background:#0f172a;color:#fff;}tr:nth-child(even){background:#f9fafb;}.act{font-weight:bold;text-transform:uppercase;}" +
+      "</style></head><body>" +
+      "<h2>📜 Log Aktivitas Siswa</h2>" +
+      '<p class="sub"><b>' + esc(name) + "</b> — " + esc(id) + " • " + logs.length + " catatan</p>" +
+      (logs.length
+        ? "<table><thead><tr><th>Waktu</th><th>Aksi</th><th>Kolom</th><th>Nilai Lama</th><th>Nilai Baru</th><th>IP</th></tr></thead><tbody>" + rowsHtml + "</tbody></table>"
+        : "<p>Belum ada log untuk siswa ini.</p>") +
+      "</body></html>"
+    );
     win.document.close();
   } catch (e) {
     alert("❌ Gagal memuat log: " + e.message);
   }
 }
+
 function injectAMStyles() {
   if (document.getElementById("amStyles")) return;
   const s = document.createElement("style");
   s.id = "amStyles";
-  s.textContent = `
-    .am-toolbar{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;background:#f8fafc;padding:14px;border-radius:12px;border:1px solid #e2e8f0;}
-    .am-btn{padding:9px 14px;border:none;border-radius:9px;background:#e2e8f0;font-weight:bold;cursor:pointer;font-size:13px;}
-    .am-btn:hover{filter:brightness(.95);}
-    .am-active{background:#2563eb;color:#fff;}
-    .am-warn{background:#f59e0b;color:#fff;}
-    .am-ok{background:#16a34a;color:#fff;}
-    .am-input{padding:9px 12px;border:1px solid #cbd5e1;border-radius:9px;font-size:13px;min-width:230px;}
-    .am-note{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;padding:10px 14px;border-radius:10px;font-size:13px;margin-bottom:14px;}
-    .am-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;}
-    .am-card{padding:12px;border-radius:12px;text-align:center;}
-    .am-card b{display:block;font-size:12px;color:#334155;margin-bottom:4px;}
-    .am-card span{font-size:22px;font-weight:bold;color:#0f172a;}
-    .am-table-wrap{overflow-x:auto;background:#fff;border-radius:12px;border:1px solid #e2e8f0;}
-    .am-table{width:100%;border-collapse:collapse;font-size:13px;}
-    .am-table th{background:#0f172a;color:#fff;padding:10px;text-align:left;white-space:nowrap;}
-    .am-table td{padding:8px 10px;border-bottom:1px solid #e2e8f0;white-space:nowrap;}
-    .am-badge{padding:4px 10px;border-radius:999px;font-size:11px;font-weight:bold;}
-    .am-ok{background:#dcfce7;color:#166534;} .am-warn{background:#fef9c3;color:#854d0e;}
-    .am-lock{background:#e2e8f0;color:#334155;}
-    .am-empty{padding:24px;text-align:center;color:#64748b;}
-    .am-alert{padding:14px;background:#fee2e2;color:#991b1b;border-radius:10px;}
-    .am-table .am-btn{padding:5px 10px;font-size:11px;margin:2px;}
-  `;
+  s.textContent =
+    ".am-toolbar{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;background:#f8fafc;padding:14px;border-radius:12px;border:1px solid #e2e8f0;}" +
+    ".am-btn{padding:9px 14px;border:none;border-radius:9px;background:#e2e8f0;font-weight:bold;cursor:pointer;font-size:13px;}" +
+    ".am-btn:hover{filter:brightness(.95);}" +
+    ".am-active{background:#2563eb;color:#fff;}" +
+    ".am-warn{background:#f59e0b;color:#fff;}" +
+    ".am-ok{background:#16a34a;color:#fff;}" +
+    ".am-input{padding:9px 12px;border:1px solid #cbd5e1;border-radius:9px;font-size:13px;min-width:150px;}" +
+    ".am-note{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;padding:10px 14px;border-radius:10px;font-size:13px;margin-bottom:14px;}" +
+    ".am-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;}" +
+    ".am-card{padding:12px;border-radius:12px;text-align:center;}" +
+    ".am-card b{display:block;font-size:12px;color:#334155;margin-bottom:4px;}" +
+    ".am-card span{font-size:22px;font-weight:bold;color:#0f172a;}" +
+    ".am-table-wrap{overflow-x:auto;background:#fff;border-radius:12px;border:1px solid #e2e8f0;}" +
+    ".am-table{width:100%;border-collapse:collapse;font-size:13px;}" +
+    ".am-table th{background:#0f172a;color:#fff;padding:10px;text-align:left;white-space:nowrap;}" +
+    ".am-th-sort:hover{background:#1e293b;}" +
+    ".am-table td{padding:8px 10px;border-bottom:1px solid #e2e8f0;white-space:nowrap;}" +
+    ".am-badge{padding:4px 10px;border-radius:999px;font-size:11px;font-weight:bold;}" +
+    ".am-ok-b{background:#dcfce7;color:#166534;}" +
+    ".am-warn{background:#fef9c3;color:#854d0e;}" +
+    ".am-lock{background:#e2e8f0;color:#334155;}" +
+    ".am-empty{padding:24px;text-align:center;color:#64748b;}" +
+    ".am-alert{padding:14px;background:#fee2e2;color:#991b1b;border-radius:10px;}" +
+    ".am-table .am-btn{padding:5px 10px;font-size:11px;margin:2px;}";
   document.head.appendChild(s);
 }
