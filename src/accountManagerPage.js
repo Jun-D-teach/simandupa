@@ -27,6 +27,7 @@ export function initAccountManagerPage() {
         <input id="amNewPassword" class="am-input" placeholder="Password baru (kosong = default12345)" />
         <button id="amBulkReset" class="am-btn am-warn">🔑 Reset Password Terpilih</button>
         <button id="amBulkQr" class="am-btn am-ok">📱 Generate QR Terpilih</button>
+        <button id="amPrintQr" class="am-btn">🖨️ Cetak Kartu QR</button>
         <button id="amReload" class="am-btn">🔄 Muat Ulang</button>
       </div>
     </div>
@@ -40,6 +41,7 @@ export function initAccountManagerPage() {
   document.getElementById("amReload").addEventListener("click", () => loadData());
   document.getElementById("amBulkReset").addEventListener("click", bulkReset);
   document.getElementById("amBulkQr").addEventListener("click", bulkQr);
+  document.getElementById("amPrintQr").addEventListener("click", printQrCards);
   document.getElementById("amSearch").addEventListener("input", (e) => { _search = e.target.value.trim(); renderTable(); });
   document.getElementById("amFilterClass").addEventListener("change", (e) => { _filterClass = e.target.value; renderTable(); });
   document.getElementById("amFilterRole").addEventListener("change", (e) => { _filterRole = e.target.value; renderTable(); });
@@ -141,6 +143,7 @@ function setActiveTab() {
   document.getElementById("amTabStudents").classList.toggle("am-active", _tab === "students");
   document.getElementById("amTabTeachers").classList.toggle("am-active", _tab === "teachers");
   document.getElementById("amBulkQr").style.display = _tab === "students" ? "" : "none";
+  document.getElementById("amPrintQr").style.display = _tab === "students" ? "" : "none";
 }
 
 function getSelected() {
@@ -230,9 +233,7 @@ function renderTable() {
     }).join("") +
     "</tbody>";
   wrap.innerHTML =
-    '<div style="padding:8px 12px;font-size:12px;color:#64748b;">Menampilkan <b>' + rows.length +
-    "</b> dari <b>" + totalAll + "</b> " + (_tab === "students" ? "siswa" : "guru") +
-    ' — klik judul kolom untuk mengurutkan</div>' +
+    '<div style="padding:8px 12px;font-size:12px;color:#64748b;">Menampilkan <b>' + rows.length + "</b> dari <b>" + totalAll + "</b> " + (_tab === "students" ? "siswa" : "guru") + " — klik judul kolom untuk mengurutkan</div>" +
     '<table class="am-table">' + head + body + "</table>";
 }
 
@@ -257,11 +258,9 @@ async function bulkQr() {
   if (!ids.length) return alert("⚠️ Centang minimal 1 siswa.");
   if (!confirm("Generate QR Code untuk " + ids.length + " siswa?")) return;
   const btn = document.getElementById("amBulkQr");
-  btn.disabled = true;
-  btn.textContent = "⏳ Membuat QR...";
+  btn.disabled = true; btn.textContent = "⏳ Membuat QR...";
   const r = await postJson(API_URL + "/api/students/generate-qr-bulk", { ids });
-  btn.disabled = false;
-  btn.textContent = "📱 Generate QR Terpilih";
+  btn.disabled = false; btn.textContent = "📱 Generate QR Terpilih";
   alert(r.success ? "✅ " + r.message : "❌ " + r.message);
   loadData();
 }
@@ -300,7 +299,65 @@ async function showStudentLogs(id, name) {
     alert("❌ Gagal memuat log: " + e.message);
   }
 }
+async function printQrCards() {
+  if (_tab !== "students") return alert("ℹ️ Kartu QR hanya untuk siswa.");
+  let ids = getSelected();
+  const useAll = !ids.length;
+  if (useAll && !confirm("Tidak ada siswa yang dicentang. Cetak kartu QR untuk SEMUA siswa?")) return;
+  if (useAll) ids = _students.map((s) => s.student_id);
 
+  const chosen = _students.filter((s) => ids.includes(s.student_id));
+  const missing = chosen.filter((s) => !s.qr_code);
+  if (missing.length) {
+    if (confirm(missing.length + " siswa belum punya QR Code. Generate sekarang?")) {
+      for (const s of missing) {
+        try {
+          await fetch(API_URL + "/api/students/" + encodeURIComponent(s.student_id) + "/generate-qr", { method: "POST", headers: adminHeaders() });
+        } catch (e) { /* lewati */ }
+      }
+      await loadData();
+    }
+  }
+  const list = _students.filter((s) => ids.includes(s.student_id));
+  const win = window.open("", "_blank", "width=1000,height=700");
+  if (!win) return alert("⚠️ Pop-up diblokir browser. Izinkan pop-up untuk mencetak.");
+  win.document.write(cardsHtml(list));
+  win.document.close();
+  setTimeout(() => { win.focus(); win.print(); }, 600);
+}
+
+function cardsHtml(list) {
+  const cards = list.map((s) =>
+    '<div class="card">' +
+      '<img src="' + (s.qr_code || "") + '" alt="QR" />' +
+      '<div class="info">' +
+        '<div class="school">MAN 2 PALEMBANG</div>' +
+        '<div class="name">' + esc(s.student_name) + '</div>' +
+        '<div class="meta">Kelas: ' + esc(s.class_id || "-") + '</div>' +
+        '<div class="meta">NISN: ' + esc(s.nisn || "-") + '</div>' +
+        '<div class="meta">ID: ' + esc(s.student_id) + '</div>' +
+      '</div>' +
+    '</div>'
+  ).join("");
+  return '<!DOCTYPE html><html><head><title>Kartu QR Siswa</title><style>' +
+    'body{font-family:Arial,sans-serif;padding:10mm;color:#111827;}' +
+    '.bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:4mm;}' +
+    '.bar h2{margin:0;font-size:16px;}' +
+    '.bar button{padding:8px 14px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-weight:bold;cursor:pointer;}' +
+    '.cards{display:grid;grid-template-columns:repeat(2,1fr);gap:4mm;}' +
+    '.card{border:1.5px dashed #94a3b8;border-radius:12px;padding:4mm;display:flex;gap:4mm;align-items:center;page-break-inside:avoid;}' +
+    '.card img{width:32mm;height:32mm;object-fit:contain;background:#fff;}' +
+    '.info{flex:1;}' +
+    '.school{font-size:9px;font-weight:bold;letter-spacing:1px;color:#1e40af;}' +
+    '.name{font-size:13px;font-weight:bold;margin:1mm 0;}' +
+    '.meta{font-size:9px;color:#334155;}' +
+    '@media print{.bar button{display:none;}}' +
+    '@page{size:A4 portrait;margin:8mm;}' +
+    '</style></head><body>' +
+    '<div class="bar"><h2>Kartu QR Absensi — MAN 2 Palembang (' + list.length + ' siswa)</h2><button onclick="window.print()">🖨️ Cetak</button></div>' +
+    '<div class="cards">' + cards + '</div>' +
+    '</body></html>';
+}
 function injectAMStyles() {
   if (document.getElementById("amStyles")) return;
   const s = document.createElement("style");
