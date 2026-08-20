@@ -191,6 +191,22 @@ async function ensureSchema() {
     KEY idx_student_logs_student (student_id),
     KEY idx_student_logs_created (created_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+     await pool.query(`CREATE TABLE IF NOT EXISTS parent_daily_reports (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    student_id VARCHAR(50) NOT NULL,
+    report_date DATE NOT NULL,
+    sent_by VARCHAR(50) DEFAULT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_student_report_date (student_id, report_date)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+     await pool.query(`CREATE TABLE IF NOT EXISTS parent_monthly_reports (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    student_id VARCHAR(50) NOT NULL,
+    report_month VARCHAR(7) NOT NULL,
+    sent_by VARCHAR(50) DEFAULT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_student_report_month (student_id, report_month)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 }
 
 //disini tempay coding wa otomatis jika tidak absen masuk, cari di kopian server js
@@ -4008,6 +4024,234 @@ app.get("/api/admin/student-logs", verifyAdminApiKey, async (req, res) => {
   } catch (error) {
     console.error("GET STUDENT LOGS ERROR:", error);
     res.status(500).json({ success: false, message: "Gagal mengambil log", error: error.message });
+  }
+});
+// ============ REKAP WA HARIAN KE ORTU (MANUAL oleh Wali Kelas) ============
+app.post("/api/teacher/:teacherId/daily-report/send", async (req, res) => {
+  try {
+    const { teacherId } = req.params;
+    const { date = "" } = req.body || {};
+    const targetDate = date || formatDateToYmd(new Date());
+
+    const [classRows] = await pool.query(
+      "SELECT class_id, class_name FROM classes WHERE wali_kelas_id = ? ORDER BY class_name ASC",
+      [teacherId]
+    );
+    if (!classRows.length) return res.status(403).json({ success: false, message: "Anda bukan wali kelas." });
+
+    const [teacherRows] = await pool.query("SELECT teacher_name FROM teachers WHERE teacher_id = ? LIMIT 1", [teacherId]);
+    const teacherName = teacherRows.length ? teacherRows[0].teacher_name : "";
+
+    const classIds = classRows.map((c) => c.class_id);
+    const [students] = await pool.query(
+      `SELECT student_id, student_name, class_id, parent_name, parent_phone
+       FROM students WHERE status_active = 'aktif' AND class_id IN (${classIds.map(() => "?").join(",")})
+       ORDER BY class_id ASC, student_name ASC`,
+      classIds
+    );
+    if (!students.length) return res.json({ success: true, message: "Tidak ada siswa di kelas perwalian.", queued: 0, skipped: 0, noPhone: 0 });
+
+    const studentIds = students.map((s) => s.student_id);
+    const [attRows] = await pool.query(
+      "SELECT student_id, attendance_time, status FROM attendance WHERE student_id IN (?) AND attendance_date = ?",
+      [studentIds, targetDate]
+    );
+    const attMap = {};
+    attRows.forEach((a) => {
+      if (!attMap[a.student_id]) attMap[a.student_id] = { masuk: "", pulang: "", status: "" };
+      if (a.status === "pulang") attMap[a.student_id].pulang = String(a.attendance_time || "").slice(0, 5);
+      else { attMap[a.student_id].masuk = String(a.attendance_time || "").slice(0, 5); attMap[a.student_id].status = a.status; }
+    });
+
+    const [yy, mm, dd] = targetDate.split("-").map(Number);
+    const tglObj = new Date(yy, mm - 1, dd);
+    const NAMA_HARI = ["Minggu","Senin","Selasa","Rabu","Kamis","Jumat","Sabtu"];
+    const NAMA_BULAN = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+    const hari = NAMA_HARI[tglObj.getDay()];
+    const tanggal = `${dd} ${NAMA_BULAN[mm - 1]} ${yy}`;
+    const jamNow = formatTimeToHms(new Date()).slice(0, 5);
+
+    let queued = 0, skipped = 0, noPhone = 0;
+    for (const s of students) {
+      if (!s.parent_phone) { noPhone++; continue; }
+      // 🔒 Kunci anti-duplikat: 1 siswa 1 laporan per hari
+      const [mark] = await pool.query(
+        "INSERT IGNORE INTO parent_daily_reports (student_id, report_date, sent_by) VALUES (?, ?, ?)",
+        [s.student_id, targetDate, teacherId]
+      );
+      if (mark.affectedRows !== 1) { skipped++; continue; }
+
+      const a = attMap[s.student_id];
+      let message;
+      if (a && a.masuk) {
+        message =
+          `Assalamu'alaikum wr. wb.\nYth. Bapak/Ibu orang tua/wali dari Ananda ${s.student_name} (${s.class_id}).\n\n` +
+          `Laporan kehadiran hari ini (${hari}, ${tanggal}):\n` +
+          `• Masuk: ${a.masuk} WIB — Status: ${String(a.status || "hadir").toUpperCase()}\n` +
+          `• Pulang: ${a.pulang ? a.pulang + " WIB" : "belum"}\n\n` +
+          `Terima kasih atas perhatian Bapak/Ibu. 🙏\n- Wali Kelas ${s.class_id} (${teacherName})`;
+      } else {
+        message =
+          `Assalamu'alaikum wr. wb.\nYth. Bapak/Ibu orang tua/wali dari Ananda ${s.student_name} (${s.class_id}).\n\n` +
+          `Hingga pukul ${jamNow} WIB hari ini (${hari}, ${tanggal}), Ananda BELUM ABSEN di sekolah.\n` +
+          `Mohon konfirmasi kehadiran Ananda. Terima kasih. 🙏\n- Wali Kelas ${s.class_id} (${teacherName})`;
+      }
+      await pool.query(
+        "INSERT INTO wa_queue (phone, message, attendance_id, status, created_at) VALUES (?, ?, ?, 'pending', NOW())",
+        [s.parent_phone, message, `RPT-${targetDate.replace(/-/g, "")}-${s.student_id}`]
+      );
+      queued++;
+    }
+
+    res.json({
+      success: true,
+      message: `Rekap harian: ${queued} WA masuk antrean, ${skipped} dilewati (sudah terkirim hari ini), ${noPhone} tanpa nomor ortu.`,
+      queued, skipped, noPhone
+    });
+  } catch (error) {
+    console.error("DAILY REPORT SEND ERROR:", error);
+    res.status(500).json({ success: false, message: "Gagal mengirim rekap harian", error: error.message });
+  }
+});
+
+// ============ REKAP WA HARIAN KE ORTU (MANUAL oleh Wali Kelas) ============
+app.post("/api/teacher/:teacherId/daily-report/send", async (req, res) => {
+  try {
+    const { teacherId } = req.params;
+    const { date = "" } = req.body || {};
+    const targetDate = date || formatDateToYmd(new Date());
+    const [classRows] = await pool.query("SELECT class_id FROM classes WHERE wali_kelas_id = ? ORDER BY class_name ASC", [teacherId]);
+    if (!classRows.length) return res.status(403).json({ success: false, message: "Anda bukan wali kelas." });
+    const [teacherRows] = await pool.query("SELECT teacher_name FROM teachers WHERE teacher_id = ? LIMIT 1", [teacherId]);
+    const teacherName = teacherRows.length ? teacherRows[0].teacher_name : "";
+    const classIds = classRows.map((c) => c.class_id);
+    const [students] = await pool.query(
+      `SELECT student_id, student_name, class_id, parent_phone FROM students WHERE status_active = 'aktif' AND class_id IN (${classIds.map(() => "?").join(",")}) ORDER BY class_id ASC, student_name ASC`,
+      classIds
+    );
+    if (!students.length) return res.json({ success: true, message: "Tidak ada siswa di kelas perwalian.", queued: 0, skipped: 0, noPhone: 0 });
+    const studentIds = students.map((s) => s.student_id);
+    const [attRows] = await pool.query(
+      "SELECT student_id, attendance_time, status FROM attendance WHERE student_id IN (?) AND attendance_date = ?",
+      [studentIds, targetDate]
+    );
+    const attMap = {};
+    attRows.forEach((a) => {
+      if (!attMap[a.student_id]) attMap[a.student_id] = { masuk: "", pulang: "", status: "" };
+      if (a.status === "pulang") attMap[a.student_id].pulang = String(a.attendance_time || "").slice(0, 5);
+      else { attMap[a.student_id].masuk = String(a.attendance_time || "").slice(0, 5); attMap[a.student_id].status = a.status; }
+    });
+    const [yy, mm, dd] = targetDate.split("-").map(Number);
+    const tglObj = new Date(yy, mm - 1, dd);
+    const NAMA_HARI = ["Minggu","Senin","Selasa","Rabu","Kamis","Jumat","Sabtu"];
+    const NAMA_BULAN = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+    const hari = NAMA_HARI[tglObj.getDay()];
+    const tanggal = `${dd} ${NAMA_BULAN[mm - 1]} ${yy}`;
+    const jamNow = formatTimeToHms(new Date()).slice(0, 5);
+    let queued = 0, skipped = 0, noPhone = 0;
+    for (const s of students) {
+      if (!s.parent_phone) { noPhone++; continue; }
+      const [mark] = await pool.query(
+        "INSERT IGNORE INTO parent_daily_reports (student_id, report_date, sent_by) VALUES (?, ?, ?)",
+        [s.student_id, targetDate, teacherId]
+      );
+      if (mark.affectedRows !== 1) { skipped++; continue; }
+      const a = attMap[s.student_id];
+      let message;
+      if (a && a.masuk) {
+        message =
+          `Assalamu'alaikum wr. wb.\nYth. Bapak/Ibu orang tua/wali dari Ananda ${s.student_name} (${s.class_id}).\n\n` +
+          `Laporan kehadiran hari ini (${hari}, ${tanggal}):\n` +
+          `• Masuk: ${a.masuk} WIB — Status: ${String(a.status || "hadir").toUpperCase()}\n` +
+          `• Pulang: ${a.pulang ? a.pulang + " WIB" : "belum"}\n\n` +
+          `Terima kasih atas perhatian Bapak/Ibu. 🙏\n- Wali Kelas ${s.class_id} (${teacherName})`;
+      } else {
+        message =
+          `Assalamu'alaikum wr. wb.\nYth. Bapak/Ibu orang tua/wali dari Ananda ${s.student_name} (${s.class_id}).\n\n` +
+          `Hingga pukul ${jamNow} WIB hari ini (${hari}, ${tanggal}), Ananda BELUM ABSEN di sekolah.\n` +
+          `Mohon konfirmasi kehadiran Ananda. Terima kasih. 🙏\n- Wali Kelas ${s.class_id} (${teacherName})`;
+      }
+      await pool.query(
+        "INSERT INTO wa_queue (phone, message, attendance_id, status, created_at) VALUES (?, ?, ?, 'pending', NOW())",
+        [s.parent_phone, message, `RPT-${targetDate.replace(/-/g, "")}-${s.student_id}`]
+      );
+      queued++;
+    }
+    res.json({ success: true, message: `Rekap harian: ${queued} WA masuk antrean, ${skipped} dilewati (sudah terkirim hari ini), ${noPhone} tanpa nomor ortu.`, queued, skipped, noPhone });
+  } catch (error) {
+    console.error("DAILY REPORT SEND ERROR:", error);
+    res.status(500).json({ success: false, message: "Gagal mengirim rekap harian", error: error.message });
+  }
+});
+
+// ============ REKAP WA BULANAN KE ORTU (MANUAL oleh Wali Kelas) ============
+app.post("/api/teacher/:teacherId/monthly-report/send", async (req, res) => {
+  try {
+    const { teacherId } = req.params;
+    const { month = "", year = "" } = req.body || {};
+    const now = new Date();
+    const m = Number(month || now.getMonth() + 1);
+    const y = Number(year || now.getFullYear());
+    if (!m || m < 1 || m > 12 || !y) return res.status(400).json({ success: false, message: "Bulan/tahun tidak valid." });
+    const [classRows] = await pool.query("SELECT class_id FROM classes WHERE wali_kelas_id = ? ORDER BY class_name ASC", [teacherId]);
+    if (!classRows.length) return res.status(403).json({ success: false, message: "Anda bukan wali kelas." });
+    const [teacherRows] = await pool.query("SELECT teacher_name FROM teachers WHERE teacher_id = ? LIMIT 1", [teacherId]);
+    const teacherName = teacherRows.length ? teacherRows[0].teacher_name : "";
+    const classIds = classRows.map((c) => c.class_id);
+    const [students] = await pool.query(
+      `SELECT student_id, student_name, class_id, parent_phone FROM students WHERE status_active = 'aktif' AND class_id IN (${classIds.map(() => "?").join(",")}) ORDER BY class_id ASC, student_name ASC`,
+      classIds
+    );
+    if (!students.length) return res.json({ success: true, message: "Tidak ada siswa di kelas perwalian.", queued: 0, skipped: 0, noPhone: 0 });
+    const monthStart = `${y}-${String(m).padStart(2, "0")}-01`;
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const monthEnd = `${y}-${String(m).padStart(2, "0")}-${String(daysInMonth).padStart(2, "0")}`;
+    const studentIds = students.map((s) => s.student_id);
+    const [attRows] = await pool.query(
+      "SELECT student_id, status FROM attendance WHERE student_id IN (?) AND attendance_date BETWEEN ? AND ?",
+      [studentIds, monthStart, monthEnd]
+    );
+    const agg = {};
+    attRows.forEach((a) => {
+      if (!agg[a.student_id]) agg[a.student_id] = { hadir: 0, terlambat: 0, st: 0, pulang: 0, th: 0 };
+      const g = agg[a.student_id];
+      if (a.status === "hadir") g.hadir++;
+      else if (a.status === "terlambat") g.terlambat++;
+      else if (a.status === "sangat terlambat") g.st++;
+      else if (a.status === "pulang") g.pulang++;
+      else if (a.status === "tidak hadir") g.th++;
+    });
+    const NAMA_BULAN = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+    const bulanLabel = `${NAMA_BULAN[m - 1]} ${y}`;
+    const monthKey = `${y}-${String(m).padStart(2, "0")}`;
+    let queued = 0, skipped = 0, noPhone = 0;
+    for (const s of students) {
+      if (!s.parent_phone) { noPhone++; continue; }
+      const [mark] = await pool.query(
+        "INSERT IGNORE INTO parent_monthly_reports (student_id, report_month, sent_by) VALUES (?, ?, ?)",
+        [s.student_id, monthKey, teacherId]
+      );
+      if (mark.affectedRows !== 1) { skipped++; continue; }
+      const g = agg[s.student_id] || { hadir: 0, terlambat: 0, st: 0, pulang: 0, th: 0 };
+      const message =
+        `Assalamu'alaikum wr. wb.\nYth. Bapak/Ibu orang tua/wali dari Ananda ${s.student_name} (${s.class_id}).\n\n` +
+        `Berikut rekap kehadiran bulan ${bulanLabel}:\n` +
+        `• Hadir tepat waktu: ${g.hadir} hari\n` +
+        `• Terlambat: ${g.terlambat} hari\n` +
+        `• Sangat terlambat: ${g.st} hari\n` +
+        `• Tidak hadir: ${g.th} hari\n` +
+        `• Absen pulang: ${g.pulang} kali\n\n` +
+        `Terima kasih atas perhatian dan kerja sama Bapak/Ibu. 🙏\n- Wali Kelas ${s.class_id} (${teacherName})`;
+      await pool.query(
+        "INSERT INTO wa_queue (phone, message, attendance_id, status, created_at) VALUES (?, ?, ?, 'pending', NOW())",
+        [s.parent_phone, message, `RPTB-${monthKey.replace(/-/g, "")}-${s.student_id}`]
+      );
+      queued++;
+    }
+    res.json({ success: true, message: `Rekap bulanan ${bulanLabel}: ${queued} WA masuk antrean, ${skipped} dilewati (sudah terkirim bulan ini), ${noPhone} tanpa nomor ortu.`, queued, skipped, noPhone });
+  } catch (error) {
+    console.error("MONTHLY REPORT SEND ERROR:", error);
+    res.status(500).json({ success: false, message: "Gagal mengirim rekap bulanan", error: error.message });
   }
 });
 app.use(express.static(path.join(__dirname, "dist")));

@@ -107,6 +107,7 @@ function renderTeacherPortal(teacher) {
               ? `<button class="teacherTabBtn btn-secondary-modern" data-tab="attendance">📊 Monitoring Siswa Saya</button>`
               : ""
           }
+          ${isWaliKelas ? `<button class="teacherTabBtn btn-secondary-modern" data-tab="dailyreport">📲 Rekap WA Ortu</button>` : ""}
           <button class="teacherTabBtn btn-secondary-modern" data-tab="permitForm">Form Ijin Siswa</button>
           <button class="teacherTabBtn btn-secondary-modern" data-tab="permitHistory">History Ijin</button>
         </div>
@@ -383,6 +384,8 @@ function initTeacherTabs(teacher) {
 
       if (tab === "profile") renderProfileTab(teacher);
       if (tab === "attendance") renderAttendanceTab(teacher);
+            if (tab === "dailyreport") renderDailyReportTab(teacher);
+                  if (tab === "dailyreport") renderDailyReportTab(teacher);
       if (tab === "permitForm") renderPermitFormTab(teacher);
       if (tab === "permitHistory") renderPermitHistoryTab(teacher);
     });
@@ -851,6 +854,117 @@ function initPermitEvents(teacher) {
   });
 }
 
+
+async function loadDailyReport(teacher) {
+  const date = document.getElementById("drDate")?.value || "";
+  const box = document.getElementById("drResult");
+  box.innerHTML = "Memuat rekap...";
+  try {
+    const result = await fetchJson(`${API_URL}/api/teacher/${teacher.teacher_id}/homeroom/attendance?date=${date}`);
+    const sum = result.summary || {};
+    const rows = result.data || [];
+    box.innerHTML = `
+      <div class="history-filter" style="margin-bottom:14px;">
+        <div class="modern-card-body" style="background:#e0f2fe;border-radius:16px;"><b>Total Siswa</b><br>${sum.total_students || 0}</div>
+        <div class="modern-card-body" style="background:#dcfce7;border-radius:16px;"><b>Hadir</b><br>${sum.hadir || 0}</div>
+        <div class="modern-card-body" style="background:#fef9c3;border-radius:16px;"><b>Terlambat</b><br>${sum.terlambat || 0}</div>
+        <div class="modern-card-body" style="background:#fee2e2;border-radius:16px;"><b>Sangat Terlambat</b><br>${sum.sangat_terlambat || 0}</div>
+        <div class="modern-card-body" style="background:#e5e7eb;border-radius:16px;"><b>Belum Absen</b><br>${sum.not_checked_in || 0}</div>
+      </div>
+      <div class="history-table-wrap">
+        <table class="history-table">
+          <thead><tr><th>Nama</th><th>Kelas</th><th>Jam</th><th>Status</th><th>HP Ortu</th></tr></thead>
+          <tbody>
+            ${rows.map((r) => `
+              <tr style="${r.status === "belum absen" ? "background:#fef2f2;" : ""}">
+                <td><b>${drEsc(r.student_name)}</b></td>
+                <td>${drEsc(r.class_id)}</td>
+                <td>${drEsc(r.attendance_time ? String(r.attendance_time).slice(0, 5) : "-")}</td>
+                <td>${drEsc(r.status)}</td>
+                <td>${drEsc(r.parent_phone || "❌ belum ada")}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch (e) {
+    box.innerHTML = `<div class="alert-danger">${drEsc(e.message)}</div>`;
+  }
+}
+
+async function sendDailyReport(teacher) {
+  const date = document.getElementById("drDate")?.value || "";
+  if (!confirm("Kirim laporan absensi harian via WA ke ortu SEMUA siswa perwalian Anda?\nSetiap ortu menerima MAKSIMAL 1 pesan per hari (duplikat otomatis dilewati).")) return;
+  const btn = document.getElementById("drSendBtn");
+  btn.disabled = true; btn.textContent = "⏳ Mengantre...";
+  try {
+    const res = await fetch(`${API_URL}/api/teacher/${teacher.teacher_id}/daily-report/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date })
+    });
+    const r = await res.json();
+    alert(r.success ? "✅ " + r.message : "❌ " + r.message);
+    loadDailyReport(teacher);
+  } catch (e) {
+    alert("❌ Gagal koneksi ke server.");
+  } finally {
+    btn.disabled = false; btn.textContent = "📤 Kirim Laporan ke Ortu";
+  }
+}
+
+function drEsc(v) {
+  return String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+}
+
+function renderDailyReportTab(teacher) {
+  const box = document.getElementById("teacherTabContent");
+  const t = new Date();
+  const ymd = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+  const monthNames = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+  box.innerHTML = `
+    <h2 class="card-title">📲 Rekap WA ke Orang Tua</h2>
+    <p class="card-subtitle">Pengiriman MANUAL per siswa. Maksimal 1 pesan harian & 1 pesan bulanan per ortu (duplikat otomatis dicegah).</p>
+    <div class="modern-card-body" style="background:#f0fdf4;border-radius:16px;margin-bottom:14px;">
+      <b>📅 Laporan Harian (1 hari)</b>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px;">
+        <input id="drDate" type="date" class="modern-input" style="max-width:200px;" value="${ymd}" />
+        <button id="drSendBtn" class="btn-primary-modern">📤 Kirim Laporan Harian</button>
+      </div>
+    </div>
+    <div class="modern-card-body" style="background:#eff6ff;border-radius:16px;">
+      <b>🗓️ Rekap Bulanan (1 bulan)</b>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px;">
+        <select id="mrMonth" class="modern-input" style="max-width:180px;">
+          ${monthNames.map((mn, i) => `<option value="${i + 1}" ${i === t.getMonth() ? "selected" : ""}>${mn}</option>`).join("")}
+        </select>
+        <input id="mrYear" type="number" class="modern-input" style="max-width:120px;" value="${t.getFullYear()}" />
+        <button id="mrSendBtn" class="btn-primary-modern">📤 Kirim Rekap Bulanan</button>
+      </div>
+    </div>
+    <div id="drResult" style="margin-top:14px;"></div>
+  `;
+  document.getElementById("drSendBtn").addEventListener("click", () => sendDailyReport(teacher));
+  document.getElementById("mrSendBtn").addEventListener("click", () => sendMonthlyReport(teacher));
+}
+
+
+async function sendMonthlyReport(teacher) {
+  const month = document.getElementById("mrMonth").value;
+  const year = document.getElementById("mrYear").value;
+  if (!confirm(`Kirim rekap kehadiran bulan ${month}/${year} ke WA ortu semua siswa perwalian?\n(1 ortu = maks 1 pesan/bulan)`)) return;
+  const btn = document.getElementById("mrSendBtn");
+  btn.disabled = true; btn.textContent = "⏳ Mengantre...";
+  try {
+    const res = await fetch(`${API_URL}/api/teacher/${teacher.teacher_id}/monthly-report/send`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ month, year })
+    });
+    const r = await res.json();
+    document.getElementById("drResult").innerHTML = r.success ? `<div class="alert-success">✅ ${drEsc(r.message)}</div>` : `<div class="alert-danger">❌ ${drEsc(r.message)}</div>`;
+  } catch (e) {
+    document.getElementById("drResult").innerHTML = `<div class="alert-danger">❌ Gagal koneksi ke server.</div>`;
+  } finally { btn.disabled = false; btn.textContent = "📤 Kirim Rekap Bulanan"; }
+}
 async function initTeacherPortalPage() {
   const teacher = getLoggedTeacher();
 
