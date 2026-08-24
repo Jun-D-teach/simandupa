@@ -56,6 +56,9 @@ const allowedOrigins = new Set([
   "http://localhost:5173",
   "http://192.168.20.1:3000",  // Tambah IP server
   "http://192.168.20.*:3000",     // Atau semua IP di subnet
+  "https://man2plg.sch.id",
+"https://sph.man2plg.sch.id",
+"https://bk.man2plg.sch.id",
   process.env.FRONTEND_URL,
 ].filter(Boolean));
 
@@ -190,6 +193,18 @@ async function ensureSchema() {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     KEY idx_student_logs_student (student_id),
     KEY idx_student_logs_created (created_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+     await pool.query(`CREATE TABLE IF NOT EXISTS sync_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    source_app VARCHAR(50) NOT NULL,
+    sync_type VARCHAR(50) NOT NULL,
+    action VARCHAR(20) NOT NULL,
+    record_count INT DEFAULT 0,
+    source_ip VARCHAR(45),
+    detail TEXT DEFAULT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_sync_source (source_app, sync_type),
+    KEY idx_sync_time (created_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
      await pool.query(`CREATE TABLE IF NOT EXISTS parent_daily_reports (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -4253,6 +4268,142 @@ app.post("/api/teacher/:teacherId/monthly-report/send", async (req, res) => {
     console.error("MONTHLY REPORT SEND ERROR:", error);
     res.status(500).json({ success: false, message: "Gagal mengirim rekap bulanan", error: error.message });
   }
+});
+
+// ============ SINKRONISASI: bk MENGAMBIL DATA DARI SIMANDUPA ============
+function verifySyncToken(req, res, next) {
+  const token = req.headers["x-sync-token"];
+  if (!token || token !== process.env.SYNC_TOKEN_BK) {
+    return res.status(401).json({ success: false, message: "Token sync BK tidak valid" });
+  }
+  const allowed = process.env.SYNC_ALLOWED_IP_BK;
+  if (allowed) {
+    const ip = String(req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "");
+    if (!ip.includes(allowed)) {
+      return res.status(403).json({ success: false, message: "IP tidak diizinkan" });
+    }
+  }
+  next();
+}
+
+async function logSync(type, action, count, ip) {
+  try {
+    await pool.query(
+      "INSERT INTO sync_logs (source_app, sync_type, action, record_count, source_ip) VALUES (?,?,?,?,?)",
+      ["bk", type, action, count, ip || null]
+    );
+  } catch (e) { /* jangan ganggu response */ }
+}
+
+// 1) SEMUA SISWA AKTIF (termasuk parent_phone)
+app.get("/api/sync/students", verifySyncToken, async (req, res) => {
+  try {
+    const { updated_after = "" } = req.query; // format: YYYY-MM-DD HH:MM:SS (opsional)
+    let sql = `SELECT student_id, nis, nisn, student_name, gender, birth_place, birth_date,
+                      address, religion, class_id, entry_year, status_active,
+                      parent_name, parent_phone, parent_email, parent_relation,
+                      username, qr_code, created_at, updated_at
+               FROM students WHERE status_active = 'aktif'`;
+    const params = [];
+    if (updated_after) {
+      sql += " AND updated_at >= ?";
+      params.push(updated_after);
+    }
+    sql += " ORDER BY class_id ASC, student_name ASC";
+    const [rows] = await pool.query(sql, params);
+    await logSync("students", "get", rows.length, req.headers["x-forwarded-for"] || "");
+    res.json({ success: true, total: rows.length, students: rows });
+  } catch (error) {
+    console.error("SYNC GET STUDENTS ERROR:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 2) 1 SISWA BERDASARKAN ID
+app.get("/api/sync/students/:studentId", verifySyncToken, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      "SELECT * FROM students WHERE student_id = ? LIMIT 1",
+      [req.params.studentId]
+    );
+    if (!rows.length) return res.status(404).json({ success: false, message: "Siswa tidak ditemukan" });
+    res.json({ success: true, student: rows[0] });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 3) ABSENSI — dengan filter tanggal (wajib)
+app.get("/api/sync/attendance", verifySyncToken, async (req, res) => {
+  try {
+    const { date_from = "", date_to = "", class_id = "" } = req.query;
+    if (!date_from || !date_to) {
+      return res.status(400).json({ success: false, message: "date_from dan date_to wajib (format YYYY-MM-DD)" });
+    }
+    let sql = `SELECT attendance_id, student_id, student_name, class_id,
+                      attendance_date, attendance_time, status, scanner_id,
+                      notification_sent, created_at
+               FROM attendance
+               WHERE attendance_date BETWEEN ? AND ?`;
+    const params = [date_from, date_to];
+    if (class_id) {
+      sql += " AND class_id = ?";
+      params.push(class_id);
+    }
+    sql += " ORDER BY attendance_date ASC, attendance_time ASC";
+    const [rows] = await pool.query(sql, params);
+    await logSync("attendance", "get", rows.length, req.headers["x-forwarded-for"] || "");
+    res.json({ success: true, total: rows.length, records: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 4) SEMUA KELAS (dengan wali kelas)
+app.get("/api/sync/classes", verifySyncToken, async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT c.class_id, c.class_name, c.wali_kelas_id,
+             t.teacher_name AS wali_kelas_name, t.nip AS wali_kelas_nip
+      FROM classes c
+      LEFT JOIN teachers t ON t.teacher_id = c.wali_kelas_id
+      ORDER BY c.class_name ASC
+    `);
+    await logSync("classes", "get", rows.length, req.headers["x-forwarded-for"] || "");
+    res.json({ success: true, total: rows.length, classes: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 5) SEMUA GURU
+app.get("/api/sync/teachers", verifySyncToken, async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT t.teacher_id, t.teacher_name, t.nip, t.phone, t.email, t.username, t.status_active,
+             GROUP_CONCAT(tr.role ORDER BY tr.role SEPARATOR ',') AS roles
+      FROM teachers t
+      LEFT JOIN teacher_roles tr ON tr.teacher_id = t.teacher_id
+      WHERE t.status_active = 'aktif'
+      GROUP BY t.teacher_id
+      ORDER BY t.teacher_name ASC
+    `);
+    await logSync("teachers", "get", rows.length, req.headers["x-forwarded-for"] || "");
+    res.json({ success: true, total: rows.length, teachers: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 6) STATUS SERVER (untuk health check dari bk)
+app.get("/api/sync/ping", verifySyncToken, async (req, res) => {
+  const [count] = await pool.query("SELECT COUNT(*) as n FROM students WHERE status_active='aktif'");
+  res.json({
+    success: true,
+    server_time: new Date().toISOString(),
+    active_students: count[0].n,
+    message: "Simandupa siap menerima permintaan sync dari BK"
+  });
 });
 app.use(express.static(path.join(__dirname, "dist")));
 const db = require("./db");
