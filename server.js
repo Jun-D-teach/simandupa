@@ -1798,7 +1798,8 @@ app.post(
         const birth_date = excelDateToFormatted(row.birth_date);
         const address = String(row.address || "").trim();
         const religion = String(row.religion || "").trim();
-        const class_id = String(row.class_id || "").trim();
+       let class_id = String(row.class_id || "").trim();
+if (class_id.includes(" - ")) class_id = class_id.split(" - ").pop().trim(); // "Kelas 11 - XI.1" -> "XI.1"
         const entry_year = String(row.entry_year || "").trim();
         const status_active = String(row.status_active || "aktif").trim();
         const parent_id = String(row.parent_id || "").trim();
@@ -4404,6 +4405,167 @@ app.get("/api/sync/ping", verifySyncToken, async (req, res) => {
     active_students: count[0].n,
     message: "Simandupa siap menerima permintaan sync dari BK"
   });
+});
+// ============ SYNC API: SPH MENARIK DATA DARI SIMANDUPA (READ-ONLY) ============
+// ============ SYNC API: SPH MENARIK DATA DARI SIMANDUPA (READ-ONLY) ============
+function verifySyncToken(req, res, next) {
+  const token = req.headers["x-sync-token"] || req.query.token || "";
+  if (!process.env.SYNC_TOKEN_SPH || token !== process.env.SYNC_TOKEN_SPH) {
+    return res.status(401).json({ success: false, message: "Token sync tidak valid" });
+  }
+  next();
+}
+
+function mapKelasSph(classId) {
+  // "Kelas 11 - XI.1" -> "XI.1" (format kolom kelas di SPH max 10 karakter)
+  const s = String(classId || "");
+  if (s.includes(" - ")) return s.split(" - ").pop().trim();
+  return s;
+}
+
+function toYmd(v) {
+  if (!v) return "";
+  if (v instanceof Date) return formatDateToYmd(v);
+  return String(v).slice(0, 10);
+}
+
+// 1) SPH tarik daftar siswa (format sesuai tabel students di SPH: nisn, nama, kelas)
+app.get("/api/sync/students", verifySyncToken, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT nisn, student_name, class_id
+       FROM students
+       WHERE status_active = 'aktif' AND nisn IS NOT NULL AND nisn != ''
+       ORDER BY student_name ASC`
+    );
+    const data = rows.map((r) => ({
+      nisn: String(r.nisn).trim(),
+      nama: r.student_name,
+      kelas: mapKelasSph(r.class_id),
+    }));
+    res.json({ success: true, count: data.length, data });
+  } catch (error) {
+    console.error("SYNC STUDENTS ERROR:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 2) SPH tarik daftar kelas + wali kelas
+app.get("/api/sync/classes", verifySyncToken, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT c.class_id, t.teacher_name AS wali, t.nip AS nip_wali
+       FROM classes c
+       LEFT JOIN teachers t ON t.teacher_id = c.wali_kelas_id
+       ORDER BY c.class_id ASC`
+    );
+    const data = rows.map((r) => ({
+      nama_kelas: mapKelasSph(r.class_id),
+      wali: r.wali || "-",
+      nip_wali: r.nip_wali || "-",
+    }));
+    res.json({ success: true, count: data.length, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 3) SPH tarik absensi per rentang tanggal
+app.get("/api/sync/attendance", verifySyncToken, async (req, res) => {
+  try {
+    const dateFrom = String(req.query.dateFrom || formatDateToYmd(new Date()));
+    const dateTo = String(req.query.dateTo || dateFrom);
+    const [rows] = await pool.query(
+      `SELECT a.student_id, s.nisn, a.student_name, a.class_id,
+              a.attendance_date, a.attendance_time, a.status
+       FROM attendance a
+       LEFT JOIN students s ON s.student_id = a.student_id
+       WHERE a.attendance_date BETWEEN ? AND ?
+       ORDER BY a.attendance_date ASC, a.attendance_time ASC
+       LIMIT 5000`,
+      [dateFrom, dateTo]
+    );
+    const data = rows.map((r) => ({
+      nisn: String(r.nisn || "").trim(),
+      nama: r.student_name,
+      kelas: mapKelasSph(r.class_id),
+      tanggal: toYmd(r.attendance_date),
+      jam: String(r.attendance_time || "").slice(0, 8),
+      status: r.status,
+    }));
+    res.json({ success: true, count: data.length, dateFrom, dateTo, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+async function logSyncPull(type, count, ip) {
+  try {
+    await pool.query(
+      "INSERT INTO sync_logs (source_app, sync_type, action, source_ip, detail) VALUES (?,?,?,?,?)",
+      ["sph", type, "pull", ip, `count=${count}`]
+    );
+  } catch (e) { /* tabel belum ada pun tidak mengganggu */ }
+}
+
+// 📥 SPH tarik data siswa (incremental via ?since=)
+app.get("/api/sync/students", verifySyncToken, async (req, res) => {
+  try {
+    const since = String(req.query.since || "").trim();
+    const limit = Math.min(Number(req.query.limit) || 1000, 2000);
+    const offset = Number(req.query.offset) || 0;
+    let where = "1=1";
+    const params = [];
+    if (since) { where += " AND updated_at >= ?"; params.push(since); }
+    params.push(limit, offset);
+    const [rows] = await pool.query(
+      `SELECT student_id, nis, nisn, student_name, gender, birth_place, birth_date,
+              address, religion, class_id, entry_year, status_active,
+              parent_name, parent_phone, parent_email, parent_relation,
+              username, created_at, updated_at
+       FROM students WHERE ${where} ORDER BY student_id ASC LIMIT ? OFFSET ?`,
+      params
+    );
+    await logSyncPull("students", rows.length, String(req.headers["x-forwarded-for"] || req.socket?.remoteAddress || ""));
+    res.json({ success: true, count: rows.length, since: since || null, data: rows });
+  } catch (error) {
+    console.error("SYNC STUDENTS ERROR:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 📥 SPH tarik data absensi (rentang tanggal)
+app.get("/api/sync/attendance", verifySyncToken, async (req, res) => {
+  try {
+    const dateFrom = String(req.query.dateFrom || formatDateToYmd(new Date())).trim();
+    const dateTo = String(req.query.dateTo || dateFrom).trim();
+    const limit = Math.min(Number(req.query.limit) || 2000, 5000);
+    const offset = Number(req.query.offset) || 0;
+    const [rows] = await pool.query(
+      `SELECT attendance_id, student_id, student_name, class_id,
+              attendance_date, attendance_time, status, scanner_id, created_at
+       FROM attendance
+       WHERE attendance_date BETWEEN ? AND ?
+       ORDER BY attendance_date ASC, attendance_time ASC
+       LIMIT ? OFFSET ?`,
+      [dateFrom, dateTo, limit, offset]
+    );
+    await logSyncPull("attendance", rows.length, String(req.headers["x-forwarded-for"] || req.socket?.remoteAddress || ""));
+    res.json({ success: true, count: rows.length, dateFrom, dateTo, data: rows });
+  } catch (error) {
+    console.error("SYNC ATTENDANCE ERROR:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 📥 SPH tarik daftar kelas
+app.get("/api/sync/classes", verifySyncToken, async (req, res) => {
+  try {
+    const [rows] = await pool.query("SELECT class_id, class_name, wali_kelas_id FROM classes ORDER BY class_name ASC");
+    res.json({ success: true, count: rows.length, data: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
 });
 app.use(express.static(path.join(__dirname, "dist")));
 const db = require("./db");
