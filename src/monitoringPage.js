@@ -24,7 +24,6 @@ export function initMonitoringPage() {
       </select></div>
     <div style="align-self:end;"><button id="monRefreshBtn" class="mon-btn-primary">🔄 Muat Data</button></div>
   </div>
-  <div class="mon-note-sort">ℹ️ Klik judul kolom (⇅) untuk mengurutkan ▲ naik / ▼ turun.</div>
   <div id="monSummary" class="mon-summary"></div>
   <div id="monTable" class="mon-table-wrap">Memuat data...</div>`;
 
@@ -32,6 +31,15 @@ export function initMonitoringPage() {
   document.getElementById("monDate").addEventListener("change", () => loadMonitoring());
   document.getElementById("monClass").addEventListener("change", () => loadMonitoring());
   document.getElementById("monView").addEventListener("change", renderFromCache);
+
+  // Klik judul kolom => urutkan
+  box.addEventListener("click", (e) => {
+    const th = e.target.closest("[data-sort]");
+    if (!th) return;
+    const key = th.dataset.sort;
+    if (_sortKey === key) { _sortDir *= -1; } else { _sortKey = key; _sortDir = 1; }
+    renderFromCache();
+  });
 
   // Tombol kirim WA manual
   box.addEventListener("click", async (e) => {
@@ -57,15 +65,6 @@ export function initMonitoringPage() {
       alert("❌ " + err.message);
       btn.disabled = false; btn.textContent = old;
     }
-  });
-
-  // ✅ Klik judul kolom => urutkan
-  box.addEventListener("click", (e) => {
-    const th = e.target.closest("[data-sort]");
-    if (!th) return;
-    const key = th.dataset.sort;
-    if (_sortKey === key) { _sortDir *= -1; } else { _sortKey = key; _sortDir = 1; }
-    renderFromCache();
   });
 
   if (autoRefreshTimer) clearInterval(autoRefreshTimer);
@@ -105,22 +104,33 @@ function renderFromCache() {
   if (view === "belum_masuk") students = students.filter((s) => !s.jam_masuk && !s.jam_tidak_hadir);
   if (view === "belum_pulang") students = students.filter((s) => s.jam_masuk && !s.jam_pulang);
   if (view === "tidak_hadir") students = students.filter((s) => s.jam_tidak_hadir);
-  students = sortStudents(students);
   renderSummary(_cache.summary || {});
   renderTable(students);
 }
 
-// ✅ Nilai pembanding untuk tiap kolom yang bisa diurutkan
+function renderSummary(sum) {
+  document.getElementById("monSummary").innerHTML =
+    `<div class="mon-card" style="background:#e0f2fe;"><b>Total Siswa</b><span>${sum.total || 0}</span></div>
+     <div class="mon-card" style="background:#dcfce7;"><b>Sudah Masuk</b><span>${sum.sudah_masuk || 0}</span></div>
+     <div class="mon-card" style="background:#fee2e2;"><b>Belum Masuk</b><span>${sum.belum_masuk || 0}</span></div>
+     <div class="mon-card" style="background:#e5e7eb;"><b>Tidak Hadir</b><span>${sum.tidak_hadir || 0}</span></div>
+     <div class="mon-card" style="background:#fce7f3;"><b>Sudah Pulang</b><span>${sum.sudah_pulang || 0}</span></div>
+     <div class="mon-card" style="background:#fef9c3;"><b>Terlambat</b><span>${sum.terlambat || 0}</span></div>`;
+}
+
+function thSort(key, label) {
+  const arrow = _sortKey === key ? (_sortDir === 1 ? " ▲" : " ▼") : " ⇅";
+  return `<th class="mon-th-sort" data-sort="${key}" style="cursor:pointer;">${label}${arrow}</th>`;
+}
+
 function sortStudents(list) {
   const val = (s) => {
     switch (_sortKey) {
-      case "id": return String(s.student_id || "").toLowerCase();
       case "name": return String(s.student_name || "").toLowerCase();
       case "class": return String(s.class_id || "").toLowerCase();
-      case "status": return statusLabel(s);
+      case "status": return String(s.status_masuk || (s.jam_tidak_hadir ? "tidak hadir" : "zzz"));
       case "masuk": return s.jam_masuk ? String(s.jam_masuk) : "99";
-      case "pulang": return s.jam_pulang ? "1_" + String(s.jam_pulang) : (s.jam_masuk ? "8" : "9");
-      case "jam_pulang": return s.jam_pulang ? String(s.jam_pulang) : "99";
+      case "pulang": return s.jam_pulang ? String(s.jam_pulang) : "99";
       default: return String(s.student_name || "").toLowerCase();
     }
   };
@@ -132,49 +142,46 @@ function sortStudents(list) {
   });
 }
 
-function statusLabel(s) {
-  if (s.jam_masuk) return String(s.status_masuk || "hadir");
-  if (s.jam_tidak_hadir) return "tidak hadir";
-  return "~belum"; // supaya "belum" selalu paling bawah saat urut naik
-}
-
-function thSort(key, label) {
-  const arrow = _sortKey === key ? (_sortDir === 1 ? " ▲" : " ▼") : " ⇅";
-  return `<th class="mon-th-sort" data-sort="${key}">${label}${arrow}</th>`;
-}
-
-function renderSummary(sum) {
-  document.getElementById("monSummary").innerHTML = `<div class="mon-card" style="background:#e0f2fe;"><b>Total Siswa</b><span>${sum.total || 0}</span></div> <div class="mon-card" style="background:#dcfce7;"><b>Sudah Masuk</b><span>${sum.sudah_masuk || 0}</span></div> <div class="mon-card" style="background:#fee2e2;"><b>Belum Masuk</b><span>${sum.belum_masuk || 0}</span></div> <div class="mon-card" style="background:#e5e7eb;"><b>Tidak Hadir</b><span>${sum.tidak_hadir || 0}</span></div> <div class="mon-card" style="background:#fce7f3;"><b>Sudah Pulang</b><span>${sum.sudah_pulang || 0}</span></div> <div class="mon-card" style="background:#fef9c3;"><b>Terlambat</b><span>${sum.terlambat || 0}</span></div>`;
-}
-
 function renderTable(students) {
   const box = document.getElementById("monTable");
   if (!students.length) { box.innerHTML = `<div class="mon-empty">Tidak ada data untuk tampilan ini.</div>`; return; }
+  const rows = sortStudents(students);
   box.innerHTML = `<table class="mon-table">
     <thead><tr>
       <th>No</th>
-      ${thSort("id", "ID")}
       ${thSort("name", "Nama")}
       ${thSort("class", "Kelas")}
       <th>NIS</th>
       ${thSort("status", "Status Masuk")}
       ${thSort("masuk", "Jam Masuk")}
-      ${thSort("pulang", "Pulang")}
-      ${thSort("jam_pulang", "Jam Pulang")}
+      <th>WA Ortu</th>
+      <th>Pulang</th>
+      ${thSort("pulang", "Jam Pulang")}
       <th>Aksi WA</th>
     </tr></thead>
-    <tbody>${students.map((s, i) => `<tr class="${!s.jam_masuk && !s.jam_tidak_hadir ? "mon-row-danger" : ""}">
-      <td>${i + 1}</td>
-      <td>${escapeHtml(s.student_id || "-")}</td>
-      <td><b>${escapeHtml(s.student_name)}</b></td>
-      <td>${escapeHtml(s.class_id || "-")}</td>
-      <td>${escapeHtml(s.nis || "-")}</td>
-      <td>${masukBadge(s)}</td>
-      <td>${escapeHtml(s.jam_masuk || "-")}</td>
-      <td>${s.jam_pulang ? `<span class="mon-badge mon-ok">PULANG</span>` : s.jam_masuk ? `<span class="mon-badge mon-warn">BELUM</span>` : "-"}</td>
-      <td>${escapeHtml(s.jam_pulang || "-")}</td>
-      <td>${!s.jam_masuk && !s.jam_tidak_hadir ? `<button class="mon-btn-wa mon-wa-st" data-student="${escapeHtml(s.student_id)}" data-name="${escapeHtml(s.student_name)}" data-type="sangat_terlambat">📩 Hadir (Sangat Terlambat)</button> <button class="mon-btn-wa mon-wa-th" data-student="${escapeHtml(s.student_id)}" data-name="${escapeHtml(s.student_name)}" data-type="tidak_hadir">📩 Tidak Hadir</button>` : "-"}</td>
-    </tr>`).join("")}</tbody></table>`;
+    <tbody>${rows.map((s, i) => `
+      <tr class="${!s.jam_masuk && !s.jam_tidak_hadir ? "mon-row-danger" : ""}">
+        <td>${i + 1}</td>
+        <td><b>${escapeHtml(s.student_name)}</b></td>
+        <td>${escapeHtml(s.class_id || "-")}</td>
+        <td>${escapeHtml(s.nis || "-")}</td>
+        <td>${masukBadge(s)}</td>
+        <td>${escapeHtml(s.jam_masuk || "-")}</td>
+        <td>${waBadge(s)}</td>
+        <td>${s.jam_pulang ? `<span class="mon-badge mon-ok">PULANG</span>` : s.jam_masuk ? `<span class="mon-badge mon-warn">BELUM</span>` : "-"}</td>
+        <td>${escapeHtml(s.jam_pulang || "-")}</td>
+        <td>${!s.jam_masuk && !s.jam_tidak_hadir ? `<button class="mon-btn-wa mon-wa-st" data-student="${escapeHtml(s.student_id)}" data-name="${escapeHtml(s.student_name)}" data-type="sangat_terlambat">📩 Hadir (Sangat Terlambat)</button> <button class="mon-btn-wa mon-wa-th" data-student="${escapeHtml(s.student_id)}" data-name="${escapeHtml(s.student_name)}" data-type="tidak_hadir">📩 Tidak Hadir</button>` : "-"}</td>
+      </tr>`).join("")}
+    </tbody></table>`;
+}
+
+function waBadge(s) {
+  if (!s.jam_masuk) return `<span class="mon-badge" style="background:#e2e8f0;color:#64748b;">-</span>`;
+  const st = String(s.wa_status || "").toLowerCase();
+  if (!st) return `<span class="mon-badge" style="background:#e2e8f0;color:#475563;">➖ tanpa antrean</span>`;
+  if (st === "sent" || st === "success" || st === "terkirim") return `<span class="mon-badge mon-ok">✅ terkirim</span>`;
+  if (st === "failed" || st === "error" || st === "gagal") return `<span class="mon-badge mon-bad">❌ gagal</span>`;
+  return `<span class="mon-badge mon-warn">⏳ ${escapeHtml(st)}</span>`;
 }
 
 function masukBadge(s) {
@@ -201,8 +208,7 @@ function injectMonitoringStyles() {
   if (document.getElementById("monitoringStyles")) return;
   const style = document.createElement("style");
   style.id = "monitoringStyles";
-  style.textContent = `.mon-toolbar{display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin-bottom:12px;background:#f8fafc;padding:14px;border-radius:12px;border:1px solid #e2e8f0;}
-  .mon-note-sort{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;padding:8px 14px;border-radius:10px;font-size:12px;margin-bottom:14px;}
+  style.textContent = `.mon-toolbar{display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin-bottom:16px;background:#f8fafc;padding:14px;border-radius:12px;border:1px solid #e2e8f0;}
   .mon-label{font-size:12px;font-weight:bold;color:#334155;}
   .mon-input{padding:10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;}
   .mon-btn-primary{padding:10px 16px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-weight:bold;cursor:pointer;}

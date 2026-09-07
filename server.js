@@ -3789,7 +3789,8 @@ app.get("/api/admin/monitoring", async (req, res) => {
     const [rows] = await pool.query(
       `SELECT s.student_id, s.student_name, s.nis, s.nisn, s.class_id, c.class_name,
         a_masuk.attendance_time AS jam_masuk, a_masuk.status AS status_masuk,
-        a_pulang.attendance_time AS jam_pulang, a_th.attendance_time AS jam_tidak_hadir
+        a_pulang.attendance_time AS jam_pulang, a_th.attendance_time AS jam_tidak_hadir,
+     w.status AS wa_status
        FROM students s
        LEFT JOIN classes c ON c.class_id = s.class_id
        LEFT JOIN attendance a_masuk ON a_masuk.student_id = s.student_id
@@ -3798,6 +3799,7 @@ app.get("/api/admin/monitoring", async (req, res) => {
            AND a_pulang.attendance_date = ? AND a_pulang.status = 'pulang'
          LEFT JOIN attendance a_th ON a_th.student_id = s.student_id
            AND a_th.attendance_date = ? AND a_th.status = 'tidak hadir'
+               LEFT JOIN wa_queue w ON w.attendance_id = a_masuk.attendance_id
        WHERE ${conditions.join(" AND ")}
        ORDER BY s.class_id ASC, s.student_name ASC`,
       params
@@ -3826,14 +3828,16 @@ app.get("/api/teacher/:teacherId/monitoring", async (req, res) => {
     const [rows] = await pool.query(
       `SELECT s.student_id, s.student_name, s.nis, s.nisn, s.class_id, c.class_name,
         a_masuk.attendance_time AS jam_masuk, a_masuk.status AS status_masuk,
-        a_pulang.attendance_time AS jam_pulang
-       FROM students s
+          a_pulang.attendance_time AS jam_pulang,
+     w.status AS wa_status
+    FROM students s
        LEFT JOIN classes c ON c.class_id = s.class_id
        LEFT JOIN attendance a_masuk ON a_masuk.student_id = s.student_id
          AND a_masuk.attendance_date = ? AND a_masuk.status IN ('hadir','terlambat','sangat terlambat')
        LEFT JOIN attendance a_pulang ON a_pulang.student_id = s.student_id
-         AND a_pulang.attendance_date = ? AND a_pulang.status = 'pulang'
-       WHERE s.status_active = 'aktif' AND s.class_id IN (${classIds.map(() => "?").join(",")})
+              AND a_pulang.attendance_date = ? AND a_pulang.status = 'pulang'
+    LEFT JOIN wa_queue w ON w.attendance_id = a_masuk.attendance_id
+    WHERE s.status_active = 'aktif' AND s.class_id IN (${classIds.map(() => "?").join(",")})
        ORDER BY s.class_id ASC, s.student_name ASC`,
       [targetDate, targetDate, ...classIds]
     );
