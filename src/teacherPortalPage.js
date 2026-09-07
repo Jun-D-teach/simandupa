@@ -855,62 +855,117 @@ function initPermitEvents(teacher) {
 }
 
 
+let _rekapView = { mode: "", date: "", month: 0, year: 0 };
+
 async function loadDailyReport(teacher) {
-  const date = document.getElementById("drDate")?.value || "";
+  const date = document.getElementById("drDate").value || getTodayDate();
   const box = document.getElementById("drResult");
-  box.innerHTML = "Memuat rekap...";
+  box.innerHTML = "Memuat data harian...";
   try {
-    const result = await fetchJson(`${API_URL}/api/teacher/${teacher.teacher_id}/homeroom/attendance?date=${date}`);
-    const sum = result.summary || {};
+    const result = await fetchJson(`${API_URL}/api/teacher/${teacher.teacher_id}/daily-summary?date=${date}`);
     const rows = result.data || [];
+    _rekapView = { mode: "daily", date, month: 0, year: 0 };
+    const belum = rows.filter((r) => !r.sent).length;
     box.innerHTML = `
-      <div class="history-filter" style="margin-bottom:14px;">
-        <div class="modern-card-body" style="background:#e0f2fe;border-radius:16px;"><b>Total Siswa</b><br>${sum.total_students || 0}</div>
-        <div class="modern-card-body" style="background:#dcfce7;border-radius:16px;"><b>Hadir</b><br>${sum.hadir || 0}</div>
-        <div class="modern-card-body" style="background:#fef9c3;border-radius:16px;"><b>Terlambat</b><br>${sum.terlambat || 0}</div>
-        <div class="modern-card-body" style="background:#fee2e2;border-radius:16px;"><b>Sangat Terlambat</b><br>${sum.sangat_terlambat || 0}</div>
-        <div class="modern-card-body" style="background:#e5e7eb;border-radius:16px;"><b>Belum Absen</b><br>${sum.not_checked_in || 0}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+        <b>📅 Laporan Harian — ${date}</b>
+        <button id="drSendAllBtn" class="btn-primary-modern">📤 Kirim ke Semua Belum Terkirim (${belum})</button>
       </div>
-      <div class="history-table-wrap">
-        <table class="history-table">
-          <thead><tr><th>Nama</th><th>Kelas</th><th>Jam</th><th>Status</th><th>HP Ortu</th></tr></thead>
-          <tbody>
-            ${rows.map((r) => `
-              <tr style="${r.status === "belum absen" ? "background:#fef2f2;" : ""}">
-                <td><b>${drEsc(r.student_name)}</b></td>
-                <td>${drEsc(r.class_id)}</td>
-                <td>${drEsc(r.attendance_time ? String(r.attendance_time).slice(0, 5) : "-")}</td>
-                <td>${drEsc(r.status)}</td>
-                <td>${drEsc(r.parent_phone || "❌ belum ada")}</td>
-              </tr>`).join("")}
-          </tbody>
-        </table>
-      </div>
-    `;
+      <div class="history-table-wrap"><table class="history-table">
+        <thead><tr><th>Nama</th><th>Kelas</th><th>Jam Masuk</th><th>Status</th><th>Jam Pulang</th><th>HP Ortu</th><th>Kirim</th><th>Aksi</th></tr></thead>
+        <tbody>${rows.map((r) => `
+          <tr>
+            <td><b>${drEsc(r.student_name)}</b></td>
+            <td>${drEsc(r.class_id)}</td>
+            <td>${drEsc(r.masuk || "-")}</td>
+            <td>${drEsc(r.status || "belum absen")}</td>
+            <td>${drEsc(r.pulang || "-")}</td>
+            <td>${drEsc(r.parent_phone || "❌ belum ada")}</td>
+            <td>${r.sent ? "✅ terkirim" : "⏳ belum"}</td>
+            <td><button class="btnWaPerSiswa" data-id="${drEsc(r.student_id)}" data-name="${drEsc(r.student_name)}" style="background:#16a34a;color:#fff;border:none;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:11px;font-weight:bold;">📤 Kirim WA</button></td>
+          </tr>`).join("")}
+        </tbody></table></div>`;
+    document.getElementById("drSendAllBtn").addEventListener("click", () => sendBulkRekap(teacher));
+    bindPerSiswaButtons(teacher);
   } catch (e) {
     box.innerHTML = `<div class="alert-danger">${drEsc(e.message)}</div>`;
   }
 }
 
-async function sendDailyReport(teacher) {
-  const date = document.getElementById("drDate")?.value || "";
-  if (!confirm("Kirim laporan absensi harian via WA ke ortu SEMUA siswa perwalian Anda?\nSetiap ortu menerima MAKSIMAL 1 pesan per hari (duplikat otomatis dilewati).")) return;
-  const btn = document.getElementById("drSendBtn");
-  btn.disabled = true; btn.textContent = "⏳ Mengantre...";
+async function loadMonthlyReport(teacher) {
+  const month = Number(document.getElementById("mrMonth").value);
+  const year = Number(document.getElementById("mrYear").value);
+  const box = document.getElementById("drResult");
+  box.innerHTML = "Memuat rekap bulanan...";
   try {
-    const res = await fetch(`${API_URL}/api/teacher/${teacher.teacher_id}/daily-report/send`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ date })
-    });
-    const r = await res.json();
-    alert(r.success ? "✅ " + r.message : "❌ " + r.message);
-    loadDailyReport(teacher);
+    const result = await fetchJson(`${API_URL}/api/teacher/${teacher.teacher_id}/monthly-summary?month=${month}&year=${year}`);
+    const rows = result.data || [];
+    _rekapView = { mode: "monthly", date: "", month, year };
+    const belum = rows.filter((r) => !r.sent).length;
+    box.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+        <b>🗓️ Rekap Bulanan — ${month}/${year}</b>
+        <button id="mrSendAllBtn" class="btn-primary-modern">📤 Kirim ke Semua Belum Terkirim (${belum})</button>
+      </div>
+      <div class="history-table-wrap"><table class="history-table">
+        <thead><tr><th>Nama</th><th>Kelas</th><th>Hadir</th><th>Terlambat</th><th>Sgt Terlambat</th><th>Tidak Hadir</th><th>Pulang</th><th>HP Ortu</th><th>Kirim</th><th>Aksi</th></tr></thead>
+        <tbody>${rows.map((r) => `
+          <tr>
+            <td><b>${drEsc(r.student_name)}</b></td>
+            <td>${drEsc(r.class_id)}</td>
+            <td>${r.hadir}</td><td>${r.terlambat}</td><td>${r.sangat_terlambat}</td><td>${r.tidak_hadir}</td><td>${r.pulang}</td>
+            <td>${drEsc(r.parent_phone || "❌ belum ada")}</td>
+            <td>${r.sent ? "✅ terkirim" : "⏳ belum"}</td>
+            <td><button class="btnWaPerSiswa" data-id="${drEsc(r.student_id)}" data-name="${drEsc(r.student_name)}" style="background:#16a34a;color:#fff;border:none;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:11px;font-weight:bold;">📤 Kirim WA</button></td>
+          </tr>`).join("")}
+        </tbody></table></div>`;
+    document.getElementById("mrSendAllBtn").addEventListener("click", () => sendBulkRekap(teacher));
+    bindPerSiswaButtons(teacher);
   } catch (e) {
-    alert("❌ Gagal koneksi ke server.");
-  } finally {
-    btn.disabled = false; btn.textContent = "📤 Kirim Laporan ke Ortu";
+    box.innerHTML = `<div class="alert-danger">${drEsc(e.message)}</div>`;
   }
+}
+
+function bindPerSiswaButtons(teacher) {
+  document.querySelectorAll(".btnWaPerSiswa").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.id;
+      const name = btn.dataset.name;
+      const label = _rekapView.mode === "daily" ? `laporan harian ${_rekapView.date}` : `rekap bulanan ${_rekapView.month}/${_rekapView.year}`;
+      if (!confirm(`Kirim WA ${label} ke ortu ${name}?`)) return;
+      btn.disabled = true; btn.textContent = "⏳...";
+      try {
+        const url = _rekapView.mode === "daily"
+          ? `${API_URL}/api/teacher/${teacher.teacher_id}/daily-report/send`
+          : `${API_URL}/api/teacher/${teacher.teacher_id}/monthly-report/send`;
+        const body = _rekapView.mode === "daily"
+          ? { date: _rekapView.date, student_id: id }
+          : { month: _rekapView.month, year: _rekapView.year, student_id: id };
+        const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const r = await res.json();
+        alert(r.success ? "✅ " + r.message : "❌ " + r.message);
+        if (_rekapView.mode === "daily") loadDailyReport(teacher); else loadMonthlyReport(teacher);
+      } catch (e) {
+        alert("❌ Gagal koneksi ke server.");
+        btn.disabled = false; btn.textContent = "📤 Kirim WA";
+      }
+    });
+  });
+}
+
+async function sendBulkRekap(teacher) {
+  const label = _rekapView.mode === "daily" ? `laporan harian ${_rekapView.date}` : `rekap bulanan ${_rekapView.month}/${_rekapView.year}`;
+  if (!confirm(`Kirim WA ${label} ke SEMUA ortu yang belum terkirim?`)) return;
+  const url = _rekapView.mode === "daily"
+    ? `${API_URL}/api/teacher/${teacher.teacher_id}/daily-report/send`
+    : `${API_URL}/api/teacher/${teacher.teacher_id}/monthly-report/send`;
+  const body = _rekapView.mode === "daily"
+    ? { date: _rekapView.date }
+    : { month: _rekapView.month, year: _rekapView.year };
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const r = await res.json();
+  alert(r.success ? "✅ " + r.message : "❌ " + r.message);
+  if (_rekapView.mode === "daily") loadDailyReport(teacher); else loadMonthlyReport(teacher);
 }
 
 function drEsc(v) {
@@ -924,12 +979,12 @@ function renderDailyReportTab(teacher) {
   const monthNames = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
   box.innerHTML = `
     <h2 class="card-title">📲 Rekap WA ke Orang Tua</h2>
-    <p class="card-subtitle">Pengiriman MANUAL per siswa. Maksimal 1 pesan harian & 1 pesan bulanan per ortu (duplikat otomatis dicegah).</p>
+    <p class="card-subtitle">Tampilkan dulu daftar siswa, lalu kirim WA per siswa atau sekaligus yang belum terkirim.</p>
     <div class="modern-card-body" style="background:#f0fdf4;border-radius:16px;margin-bottom:14px;">
       <b>📅 Laporan Harian (1 hari)</b>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px;">
         <input id="drDate" type="date" class="modern-input" style="max-width:200px;" value="${ymd}" />
-        <button id="drSendBtn" class="btn-primary-modern">📤 Kirim Laporan Harian</button>
+        <button id="drLoadBtn" class="btn-primary-modern">📅 Tampilkan Laporan Harian</button>
       </div>
     </div>
     <div class="modern-card-body" style="background:#eff6ff;border-radius:16px;">
@@ -939,15 +994,13 @@ function renderDailyReportTab(teacher) {
           ${monthNames.map((mn, i) => `<option value="${i + 1}" ${i === t.getMonth() ? "selected" : ""}>${mn}</option>`).join("")}
         </select>
         <input id="mrYear" type="number" class="modern-input" style="max-width:120px;" value="${t.getFullYear()}" />
-        <button id="mrSendBtn" class="btn-primary-modern">📤 Kirim Rekap Bulanan</button>
+        <button id="mrLoadBtn" class="btn-primary-modern">🗓️ Tampilkan Rekap Bulanan</button>
       </div>
     </div>
-    <div id="drResult" style="margin-top:14px;"></div>
-  `;
-  document.getElementById("drSendBtn").addEventListener("click", () => sendDailyReport(teacher));
-  document.getElementById("mrSendBtn").addEventListener("click", () => sendMonthlyReport(teacher));
+    <div id="drResult" style="margin-top:14px;"><div class="empty-state">Silakan tampilkan laporan harian / bulanan terlebih dahulu.</div></div>`;
+  document.getElementById("drLoadBtn").addEventListener("click", () => loadDailyReport(teacher));
+  document.getElementById("mrLoadBtn").addEventListener("click", () => loadMonthlyReport(teacher));
 }
-
 
 async function sendMonthlyReport(teacher) {
   const month = document.getElementById("mrMonth").value;

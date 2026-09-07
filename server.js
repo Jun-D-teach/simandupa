@@ -214,14 +214,7 @@ async function ensureSchema() {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uniq_student_report_date (student_id, report_date)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
-     await pool.query(`CREATE TABLE IF NOT EXISTS parent_monthly_reports (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    student_id VARCHAR(50) NOT NULL,
-    report_month VARCHAR(7) NOT NULL,
-    sent_by VARCHAR(50) DEFAULT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY uniq_student_report_month (student_id, report_month)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+   await pool.query(`CREATE TABLE IF NOT EXISTS parent_monthly_reports ( id INT AUTO_INCREMENT PRIMARY KEY, student_id VARCHAR(50) NOT NULL, report_month VARCHAR(7) NOT NULL, sent_by VARCHAR(50) DEFAULT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uniq_student_report_month (student_id, report_month) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 }
 
 //disini tempay coding wa otomatis jika tidak absen masuk, cari di kopian server js
@@ -3580,31 +3573,17 @@ app.get("/api/export/homeroom-time-report", async (req, res) => {
     const today = new Date();
     const tanggalCetak = `${tempat}, ${String(today.getDate()).padStart(2, "0")} ${monthNames[today.getMonth()]} ${today.getFullYear()}`;
 
-    const dayHeaders = Array.from({ length: daysInMonth }, (_, i) => {
-      const day = i + 1;
-      return `
-        <th colspan="2">${day}</th>
-      `;
-    }).join("");
-
-    const subHeaders = Array.from({ length: daysInMonth }, () => {
-      return `
-        <th>D</th>
-        <th>P</th>
-      `;
-    }).join("");
+     const dayHeaders = Array.from({ length: daysInMonth }, (_, i) => {
+   return `<th class="day-col">${i + 1}</th>`;
+ }).join("");
 
     const bodyRows = students
       .map((student, index) => {
-        const dayCells = Array.from({ length: daysInMonth }, (_, i) => {
-          const day = i + 1;
-          const data = attendanceMap[student.student_id]?.[day] || {};
-
-          return `
-          <td>${data.datang || ""}</td>
-          <td>${data.pulang || ""}</td>
-        `;
-        }).join("");
+             const dayCells = Array.from({ length: daysInMonth }, (_, i) => {
+       const day = i + 1;
+       const data = attendanceMap[student.student_id]?.[day] || {};
+       return `<td class="day-col"><div class="in">${data.datang || ""}</div><div class="out">${data.pulang || ""}</div></td>`;
+     }).join("");
 
         return `
         <tr>
@@ -3674,10 +3653,17 @@ app.get("/api/export/homeroom-time-report", async (req, res) => {
           }
 
           .name {
-            text-align: left;
+          text-align: left;
             min-width: 160px;
           }
-
+       th.day-col { min-width: 38px; }
+       td.day-col { min-width: 38px; padding: 2px 4px; vertical-align: top; }
+       td.day-col .in { border-bottom: 1px dotted #9ca3af; color: #111827; font-weight: 600; }
+       td.day-col .out { color: #6b7280; }
+       @media print {
+         th.day-col, td.day-col { min-width: 26px; }
+         td.day-col .in, td.day-col .out { font-size: 8px; line-height: 1.2; }
+       }
           .note {
             margin-top: 10px;
             font-size: 11px;
@@ -3738,27 +3724,24 @@ app.get("/api/export/homeroom-time-report", async (req, res) => {
         </div>
 
         <table>
-          <thead>
-            <tr>
-              <th rowspan="2">No</th>
-              <th rowspan="2">NIS</th>
-              <th rowspan="2">NISN</th>
-              <th rowspan="2">Nama Siswa</th>
-              <th rowspan="2">JK</th>
-              ${dayHeaders}
-            </tr>
-            <tr>
-              ${subHeaders}
-            </tr>
-          </thead>
+                 <thead>
+         <tr>
+           <th>No</th>
+           <th>NIS</th>
+           <th>NISN</th>
+           <th>Nama Siswa</th>
+           <th>JK</th>
+           ${dayHeaders}
+         </tr>
+       </thead>
 
           <tbody>
-            ${bodyRows || `<tr><td colspan="${5 + daysInMonth * 2}">Belum ada siswa.</td></tr>`}
+            ${bodyRows || `<tr><td colspan="${5 + daysInMonth}">Belum ada siswa.</td></tr>`}
           </tbody>
         </table>
 
         <div class="note">
-          Keterangan: D = Jam Datang, P = Jam Pulang.
+          Keterangan: tiap kolom tanggal berisi dua baris — baris atas = jam datang, baris bawah = jam pulang.
         </div>
 
         <div class="signature">
@@ -3852,7 +3835,7 @@ app.get("/api/teacher/:teacherId/monitoring", async (req, res) => {
          AND a_pulang.attendance_date = ? AND a_pulang.status = 'pulang'
        WHERE s.status_active = 'aktif' AND s.class_id IN (${classIds.map(() => "?").join(",")})
        ORDER BY s.class_id ASC, s.student_name ASC`,
-      [targetDate, targetDate, targetDate, ...classIds]
+      [targetDate, targetDate, ...classIds]
     );
     res.json({ success: true, date: targetDate, classes: classRows, summary: buildMonitoringSummary(rows), students: rows });
   } catch (error) {
@@ -4046,7 +4029,7 @@ app.get("/api/admin/student-logs", verifyAdminApiKey, async (req, res) => {
 app.post("/api/teacher/:teacherId/daily-report/send", async (req, res) => {
   try {
     const { teacherId } = req.params;
-    const { date = "" } = req.body || {};
+    const { date = "", student_id = "" } = req.body || {};
     const targetDate = date || formatDateToYmd(new Date());
 
     const [classRows] = await pool.query(
@@ -4134,18 +4117,24 @@ app.post("/api/teacher/:teacherId/daily-report/send", async (req, res) => {
 app.post("/api/teacher/:teacherId/daily-report/send", async (req, res) => {
   try {
     const { teacherId } = req.params;
-    const { date = "" } = req.body || {};
+    const { date = "", student_id = "" } = req.body || {};
     const targetDate = date || formatDateToYmd(new Date());
     const [classRows] = await pool.query("SELECT class_id FROM classes WHERE wali_kelas_id = ? ORDER BY class_name ASC", [teacherId]);
     if (!classRows.length) return res.status(403).json({ success: false, message: "Anda bukan wali kelas." });
     const [teacherRows] = await pool.query("SELECT teacher_name FROM teachers WHERE teacher_id = ? LIMIT 1", [teacherId]);
     const teacherName = teacherRows.length ? teacherRows[0].teacher_name : "";
     const classIds = classRows.map((c) => c.class_id);
-    const [students] = await pool.query(
-      `SELECT student_id, student_name, class_id, parent_phone FROM students WHERE status_active = 'aktif' AND class_id IN (${classIds.map(() => "?").join(",")}) ORDER BY class_id ASC, student_name ASC`,
-      classIds
-    );
-    if (!students.length) return res.json({ success: true, message: "Tidak ada siswa di kelas perwalian.", queued: 0, skipped: 0, noPhone: 0 });
+    const studentParams = [...classIds];
+ let studentFilter = "";
+ if (student_id) { studentFilter = " AND student_id = ?"; studentParams.push(student_id); }
+ 
+const [students] = await pool.query(
+   `SELECT student_id, student_name, class_id, parent_name, parent_phone
+    FROM students WHERE status_active = 'aktif' AND class_id IN (${classIds.map(() => "?").join(",")})${studentFilter}
+    ORDER BY class_id ASC, student_name ASC`,
+   studentParams
+ );
+ if (!students.length) return res.json({ success: false, message: "Siswa tidak ditemukan di kelas perwalian Anda.", queued: 0, skipped: 0, noPhone: 0 });
     const studentIds = students.map((s) => s.student_id);
     const [attRows] = await pool.query(
       "SELECT student_id, attendance_time, status FROM attendance WHERE student_id IN (?) AND attendance_date = ?",
@@ -4171,7 +4160,7 @@ app.post("/api/teacher/:teacherId/daily-report/send", async (req, res) => {
         "INSERT IGNORE INTO parent_daily_reports (student_id, report_date, sent_by) VALUES (?, ?, ?)",
         [s.student_id, targetDate, teacherId]
       );
-      if (mark.affectedRows !== 1) { skipped++; continue; }
+       if (!student_id && mark.affectedRows !== 1) { skipped++; continue; }
       const a = attMap[s.student_id];
       let message;
       if (a && a.masuk) {
@@ -4565,6 +4554,139 @@ app.get("/api/sync/classes", verifySyncToken, async (req, res) => {
     res.json({ success: true, count: rows.length, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+});
+// ============ RINGKASAN HARIAN PER SISWA (untuk tabel rekap WA) ============
+app.get("/api/teacher/:teacherId/daily-summary", async (req, res) => {
+  try {
+    const { teacherId } = req.params;
+    const targetDate = String(req.query.date || formatDateToYmd(new Date()));
+    const [classRows] = await pool.query("SELECT class_id FROM classes WHERE wali_kelas_id = ? ORDER BY class_name ASC", [teacherId]);
+    if (!classRows.length) return res.status(403).json({ success: false, message: "Anda bukan wali kelas." });
+    const classIds = classRows.map((c) => c.class_id);
+    const [students] = await pool.query(
+      `SELECT student_id, student_name, class_id, parent_name, parent_phone
+       FROM students WHERE status_active = 'aktif' AND class_id IN (${classIds.map(() => "?").join(",")})
+       ORDER BY class_id ASC, student_name ASC`, classIds);
+    const studentIds = students.map((s) => s.student_id);
+    const attMap = {}; const sentMap = {};
+    if (studentIds.length) {
+      const [attRows] = await pool.query("SELECT student_id, attendance_time, status FROM attendance WHERE student_id IN (?) AND attendance_date = ?", [studentIds, targetDate]);
+      attRows.forEach((a) => {
+        if (!attMap[a.student_id]) attMap[a.student_id] = { masuk: "", pulang: "", status: "" };
+        if (a.status === "pulang") attMap[a.student_id].pulang = String(a.attendance_time || "").slice(0, 5);
+        else { attMap[a.student_id].masuk = String(a.attendance_time || "").slice(0, 5); attMap[a.student_id].status = a.status; }
+      });
+      const [sentRows] = await pool.query("SELECT student_id FROM parent_daily_reports WHERE student_id IN (?) AND report_date = ?", [studentIds, targetDate]);
+      sentRows.forEach((r) => { sentMap[r.student_id] = 1; });
+    }
+    const data = students.map((s) => ({ ...s, ...(attMap[s.student_id] || { masuk: "", pulang: "", status: "" }), sent: sentMap[s.student_id] || 0 }));
+    res.json({ success: true, date: targetDate, data });
+  } catch (error) {
+    console.error("DAILY SUMMARY ERROR:", error);
+    res.status(500).json({ success: false, message: "Gagal memuat ringkasan harian", error: error.message });
+  }
+});
+
+// ============ RINGKASAN BULANAN PER SISWA ============
+app.get("/api/teacher/:teacherId/monthly-summary", async (req, res) => {
+  try {
+    const { teacherId } = req.params;
+    const now = new Date();
+    const m = Number(req.query.month || now.getMonth() + 1);
+    const y = Number(req.query.year || now.getFullYear());
+    const monthKey = `${y}-${String(m).padStart(2, "0")}`;
+    const monthStart = `${monthKey}-01`;
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const monthEnd = `${monthKey}-${String(daysInMonth).padStart(2, "0")}`;
+    const [classRows] = await pool.query("SELECT class_id FROM classes WHERE wali_kelas_id = ? ORDER BY class_name ASC", [teacherId]);
+    if (!classRows.length) return res.status(403).json({ success: false, message: "Anda bukan wali kelas." });
+    const classIds = classRows.map((c) => c.class_id);
+    const [students] = await pool.query(
+      `SELECT student_id, student_name, class_id, parent_name, parent_phone
+       FROM students WHERE status_active = 'aktif' AND class_id IN (${classIds.map(() => "?").join(",")})
+       ORDER BY class_id ASC, student_name ASC`, classIds);
+    const studentIds = students.map((s) => s.student_id);
+    const agg = {}; const sentMap = {};
+    if (studentIds.length) {
+      const [attRows] = await pool.query("SELECT student_id, status FROM attendance WHERE student_id IN (?) AND attendance_date BETWEEN ? AND ?", [studentIds, monthStart, monthEnd]);
+      attRows.forEach((a) => {
+        if (!agg[a.student_id]) agg[a.student_id] = { hadir: 0, terlambat: 0, sangat_terlambat: 0, tidak_hadir: 0, pulang: 0 };
+        const g = agg[a.student_id];
+        if (a.status === "hadir") g.hadir++;
+        else if (a.status === "terlambat") g.terlambat++;
+        else if (a.status === "sangat terlambat") g.sangat_terlambat++;
+        else if (a.status === "tidak hadir") g.tidak_hadir++;
+        else if (a.status === "pulang") g.pulang++;
+      });
+      const [sentRows] = await pool.query("SELECT student_id FROM parent_monthly_reports WHERE student_id IN (?) AND report_month = ?", [studentIds, monthKey]);
+      sentRows.forEach((r) => { sentMap[r.student_id] = 1; });
+    }
+    const data = students.map((s) => ({ ...s, ...(agg[s.student_id] || { hadir: 0, terlambat: 0, sangat_terlambat: 0, tidak_hadir: 0, pulang: 0 }), sent: sentMap[s.student_id] || 0 }));
+    res.json({ success: true, month: m, year: y, data });
+  } catch (error) {
+    console.error("MONTHLY SUMMARY ERROR:", error);
+    res.status(500).json({ success: false, message: "Gagal memuat ringkasan bulanan", error: error.message });
+  }
+});
+
+// ============ KIRIM REKAP BULANAN KE ORTU (per siswa / massal) ============
+app.post("/api/teacher/:teacherId/monthly-report/send", async (req, res) => {
+  try {
+    const { teacherId } = req.params;
+    const { month = "", year = "", student_id = "" } = req.body || {};
+    const now = new Date();
+    const m = Number(month || now.getMonth() + 1);
+    const y = Number(year || now.getFullYear());
+    const monthKey = `${y}-${String(m).padStart(2, "0")}`;
+    const monthStart = `${monthKey}-01`;
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const monthEnd = `${monthKey}-${String(daysInMonth).padStart(2, "0")}`;
+    const [classRows] = await pool.query("SELECT class_id FROM classes WHERE wali_kelas_id = ? ORDER BY class_name ASC", [teacherId]);
+    if (!classRows.length) return res.status(403).json({ success: false, message: "Anda bukan wali kelas." });
+    const [teacherRows] = await pool.query("SELECT teacher_name FROM teachers WHERE teacher_id = ? LIMIT 1", [teacherId]);
+    const teacherName = teacherRows.length ? teacherRows[0].teacher_name : "";
+    const classIds = classRows.map((c) => c.class_id);
+    const studentParams = [...classIds];
+    let studentFilter = "";
+    if (student_id) { studentFilter = " AND student_id = ?"; studentParams.push(student_id); }
+    const [students] = await pool.query(
+      `SELECT student_id, student_name, class_id, parent_name, parent_phone
+       FROM students WHERE status_active = 'aktif' AND class_id IN (${classIds.map(() => "?").join(",")})${studentFilter}
+       ORDER BY class_id ASC, student_name ASC`, studentParams);
+    if (!students.length) return res.json({ success: false, message: "Siswa tidak ditemukan di kelas perwalian Anda.", queued: 0, skipped: 0, noPhone: 0 });
+    const studentIds = students.map((s) => s.student_id);
+    const [attRows] = await pool.query("SELECT student_id, status FROM attendance WHERE student_id IN (?) AND attendance_date BETWEEN ? AND ?", [studentIds, monthStart, monthEnd]);
+    const agg = {};
+    attRows.forEach((a) => {
+      if (!agg[a.student_id]) agg[a.student_id] = { hadir: 0, terlambat: 0, sangat_terlambat: 0, tidak_hadir: 0, pulang: 0 };
+      const g = agg[a.student_id];
+      if (a.status === "hadir") g.hadir++;
+      else if (a.status === "terlambat") g.terlambat++;
+      else if (a.status === "sangat terlambat") g.sangat_terlambat++;
+      else if (a.status === "tidak hadir") g.tidak_hadir++;
+      else if (a.status === "pulang") g.pulang++;
+    });
+    const NAMA_BULAN = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+    const bulanLabel = `${NAMA_BULAN[m - 1]} ${y}`;
+    let queued = 0, skipped = 0, noPhone = 0;
+    for (const s of students) {
+      if (!s.parent_phone) { noPhone++; continue; }
+      const [mark] = await pool.query("INSERT IGNORE INTO parent_monthly_reports (student_id, report_month, sent_by) VALUES (?, ?, ?)", [s.student_id, monthKey, teacherId]);
+      if (!student_id && mark.affectedRows !== 1) { skipped++; continue; }
+      const g = agg[s.student_id] || { hadir: 0, terlambat: 0, sangat_terlambat: 0, tidak_hadir: 0, pulang: 0 };
+      const message =
+        `Assalamu'alaikum wr. wb.\nYth. Bapak/Ibu orang tua/wali dari Ananda ${s.student_name} (${s.class_id}).\n\n` +
+        `Berikut rekap kehadiran Ananda bulan ${bulanLabel}:\n` +
+        `• Hadir tepat waktu: ${g.hadir} hari\n• Terlambat: ${g.terlambat} hari\n• Sangat terlambat: ${g.sangat_terlambat} hari\n• Tidak hadir: ${g.tidak_hadir} hari\n• Absen pulang: ${g.pulang} kali\n\n` +
+        `Terima kasih atas perhatian dan kerja sama Bapak/Ibu. 🙏\n- Wali Kelas ${s.class_id} (${teacherName})`;
+      await pool.query("INSERT INTO wa_queue (phone, message, attendance_id, status, created_at) VALUES (?, ?, ?, 'pending', NOW())", [s.parent_phone, message, `RPTB-${monthKey.replace(/-/g, "")}-${s.student_id}`]);
+      queued++;
+    }
+    res.json({ success: true, message: `Rekap bulanan ${bulanLabel}: ${queued} WA masuk antrean, ${skipped} dilewati (sudah terkirim), ${noPhone} tanpa nomor ortu.`, queued, skipped, noPhone });
+  } catch (error) {
+    console.error("MONTHLY REPORT SEND ERROR:", error);
+    res.status(500).json({ success: false, message: "Gagal mengirim rekap bulanan", error: error.message });
   }
 });
 app.use(express.static(path.join(__dirname, "dist")));
