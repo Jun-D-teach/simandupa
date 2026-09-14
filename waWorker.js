@@ -78,11 +78,13 @@ async function processWAQueue() {
           console.log(`[WA Queue] Mengirim ke ${msg.phone}...`);
           const result = await sendWhatsApp(msg.phone, msg.message);
           
-          if (!result.success) {
+                   if (!result.success) {
             console.log(`[WA Queue] ❌ Gagal kirim ke ${msg.phone}`);
+            // 🔧 FIX: Ambil alasan error dari respons Fonnte
+            const errorMsg = result.data?.reason || result.data?.message || result.message || "Ditolak server";
             await connection.query(
-              "UPDATE wa_queue SET status = 'failed', retry_count = retry_count + 1, sent_at = NULL WHERE id = ?",
-              [msg.id]
+              "UPDATE wa_queue SET status = 'failed', retry_count = retry_count + 1, last_error = ?, sent_at = NULL WHERE id = ?",
+              [errorMsg, msg.id]
             );
           } else {
             console.log(`[WA Queue] ✅ Terkirim ke ${msg.phone}`);

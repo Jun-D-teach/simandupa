@@ -577,21 +577,33 @@ function renderBelumList(title, list, bg, withActions = false) {
 }
 function renderSudahTable(rows) {
   if (!rows.length) return `<div class="empty-state">Belum ada siswa yang absen masuk.</div>`;
-  return `
-    <div class="history-table-wrap">
-      <table class="history-table">
-        <thead><tr><th>Nama</th><th>Kelas</th><th>Jam Masuk</th><th>Status</th><th>Jam Pulang</th></tr></thead>
-        <tbody>${rows.map((r) => `
-          <tr>
-            <td><b>${escapeHtml(r.student_name)}</b></td>
-            <td>${escapeHtml(r.class_id || "-")}</td>
-            <td>${escapeHtml(r.jam_masuk || "-")}</td>
-            <td><span class="status-badge ${r.status_masuk === "hadir" ? "status-success" : r.status_masuk === "sangat terlambat" ? "status-danger" : ""}">${escapeHtml(String(r.status_masuk || "-").toUpperCase())}</span></td>
-            <td>${escapeHtml(r.jam_pulang || "belum")}</td>
-          </tr>`).join("")}
-        </tbody>
-      </table>
-    </div>`;
+  function waBadge(s) {
+    if (!s.jam_masuk) return `-`;
+    const st = String(s.wa_status || "").toLowerCase();
+    const err = String(s.wa_last_error || "").trim();
+    if (!st) return `<span style="background:#e2e8f0;color:#475563;padding:3px 8px;border-radius:999px;font-size:11px;">➖</span>`;
+    if (st === "sent" || st === "success") return `<span title="Terkirim" style="background:#dcfce7;color:#166534;padding:3px 8px;border-radius:999px;font-size:11px;">✅</span>`;
+    if (st === "failed" || st === "error") {
+      const tip = err ? `Alasan: ${err}\nNomor: ${s.parent_phone || '-'}` : `Nomor: ${s.parent_phone || '-'}`;
+      return `<span title="${escapeHtml(tip).replace(/"/g,'&quot;')}" style="background:#fee2e2;color:#991b1b;padding:3px 8px;border-radius:999px;font-size:11px;cursor:help;">❌ ⓘ</span>`;
+    }
+    return `<span style="background:#fef9c3;color:#854d0e;padding:3px 8px;border-radius:999px;font-size:11px;">⏳</span>`;
+  }
+  return `<div class="history-table-wrap">
+    <table class="history-table">
+      <thead><tr><th>Nama</th><th>Kelas</th><th>Jam Masuk</th><th>Status</th><th>WA Ortu</th><th>Jam Pulang</th></tr></thead>
+      <tbody>${rows.map((r) => `
+        <tr>
+          <td><b>${escapeHtml(r.student_name)}</b></td>
+          <td>${escapeHtml(r.class_id || "-")}</td>
+          <td>${escapeHtml(r.jam_masuk || "-")}</td>
+          <td><span class="status-badge ${r.status_masuk === "hadir" ? "status-success" : r.status_masuk === "sangat terlambat" ? "status-danger" : ""}">${escapeHtml(String(r.status_masuk || "-").toUpperCase())}</span></td>
+          <td>${waBadge(r)}</td>
+          <td>${escapeHtml(r.jam_pulang || "belum")}</td>
+        </tr>`).join("")}
+      </tbody>
+    </table>
+  </div>`;
 }
 
 function initHomeroomAttendanceEvents(teacher) {
@@ -729,27 +741,23 @@ function resetPermitForm(teacher) {
 }
 
 async function loadTeacherProfile(teacher) {
-  const result = await fetchJson(
-    `${API_URL}/api/teacher/${teacher.teacher_id}/profile`,
-  );
-  const data = result.data;
-
-  document.getElementById("profileTeacherName").textContent =
-    data.teacher_name || "-";
-  document.getElementById("profileTeacherNip").textContent = data.nip || "-";
-  document.getElementById("profileTeacherEmail").textContent =
-    data.email || "-";
-  document.getElementById("profileTeacherPhone").textContent =
-    data.phone || "-";
-  document.getElementById("profileTeacherRoles").textContent =
-    (data.roles || []).join(", ") || "-";
-
-  const homeroomText = (data.homeroom_classes || [])
-    .map((item) => item.class_id)
-    .join(", ");
-
-  document.getElementById("profileHomeroomClasses").textContent =
-    homeroomText || "Bukan wali kelas";
+  try {
+    const result = await fetchJson(`${API_URL}/api/teacher/${teacher.teacher_id}/profile`);
+    const data = result.data;
+    const set = (id, val) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = val;
+    };
+    set("profileTeacherName", data.teacher_name || "-");
+    set("profileTeacherNip", data.nip || "-");
+    set("profileTeacherEmail", data.email || "-");
+    set("profileTeacherPhone", data.phone || "-");
+    set("profileTeacherRoles", (data.roles || []).join(", ") || "-");
+    const homeroomText = (data.homeroom_classes || []).map((i) => i.class_id).join(", ");
+    set("profileHomeroomClasses", homeroomText || "Bukan wali kelas");
+  } catch (e) {
+    console.error("LOAD TEACHER PROFILE ERROR:", e);
+  }
 }
 
 function initPermitEvents(teacher) {

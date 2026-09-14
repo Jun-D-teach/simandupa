@@ -2,8 +2,10 @@ const fetch = require("node-fetch");
 
 async function sendWhatsApp(phone, message) {
   try {
-    const cleanPhone = String(phone || "").replace(/\D/g, "");
-
+    let cleanPhone = String(phone || "").replace(/\D/g, "");
+     if (cleanPhone.startsWith("0")) {
+      cleanPhone = "62" + cleanPhone.substring(1);
+    } 
     if (!cleanPhone) {
       return {
         success: false,

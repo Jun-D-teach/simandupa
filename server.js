@@ -3799,7 +3799,7 @@ app.get("/api/admin/monitoring", async (req, res) => {
            AND a_pulang.attendance_date = ? AND a_pulang.status = 'pulang'
          LEFT JOIN attendance a_th ON a_th.student_id = s.student_id
            AND a_th.attendance_date = ? AND a_th.status = 'tidak hadir'
-               LEFT JOIN wa_queue w ON w.attendance_id = a_masuk.attendance_id
+               LEFT JOIN wa_queue w ON w.attendance_id COLLATE utf8mb4_general_ci = a_masuk.attendance_id
        WHERE ${conditions.join(" AND ")}
        ORDER BY s.class_id ASC, s.student_name ASC`,
       params
@@ -3836,7 +3836,7 @@ app.get("/api/teacher/:teacherId/monitoring", async (req, res) => {
          AND a_masuk.attendance_date = ? AND a_masuk.status IN ('hadir','terlambat','sangat terlambat')
        LEFT JOIN attendance a_pulang ON a_pulang.student_id = s.student_id
               AND a_pulang.attendance_date = ? AND a_pulang.status = 'pulang'
-    LEFT JOIN wa_queue w ON w.attendance_id = a_masuk.attendance_id
+    LEFT JOIN wa_queue w ON w.attendance_id COLLATE utf8mb4_general_ci = a_masuk.attendance_id
     WHERE s.status_active = 'aktif' AND s.class_id IN (${classIds.map(() => "?").join(",")})
        ORDER BY s.class_id ASC, s.student_name ASC`,
       [targetDate, targetDate, ...classIds]

@@ -178,10 +178,16 @@ function renderTable(students) {
 function waBadge(s) {
   if (!s.jam_masuk) return `<span class="mon-badge" style="background:#e2e8f0;color:#64748b;">-</span>`;
   const st = String(s.wa_status || "").toLowerCase();
+  const err = String(s.wa_last_error || "").trim();
   if (!st) return `<span class="mon-badge" style="background:#e2e8f0;color:#475563;">➖ tanpa antrean</span>`;
-  if (st === "sent" || st === "success" || st === "terkirim") return `<span class="mon-badge mon-ok">✅ terkirim</span>`;
-  if (st === "failed" || st === "error" || st === "gagal") return `<span class="mon-badge mon-bad">❌ gagal</span>`;
-  return `<span class="mon-badge mon-warn">⏳ ${escapeHtml(st)}</span>`;
+  if (st === "sent" || st === "success" || st === "terkirim") {
+    return `<span class="mon-badge mon-ok" title="Terkirim ke ${escapeHtml(s.parent_phone || '-')}">✅ terkirim</span>`;
+  }
+  if (st === "failed" || st === "error" || st === "gagal") {
+    const tip = err ? `Alasan gagal:\n${err}\n\nNomor: ${s.parent_phone || '-'}\n\nPerbaiki nomor di Data Siswa, lalu klik tombol WA manual untuk kirim ulang.` : `Nomor: ${s.parent_phone || '-'} (tidak terdaftar/tidak aktif)`;
+    return `<span class="mon-badge mon-bad" title="${escapeHtml(tip).replace(/"/g,'&quot;')}" style="cursor:help;">❌ gagal ⓘ</span>`;
+  }
+  return `<span class="mon-badge mon-warn" title="Sedang dalam antrean pengiriman">⏳ ${escapeHtml(st)}</span>`;
 }
 
 function masukBadge(s) {
