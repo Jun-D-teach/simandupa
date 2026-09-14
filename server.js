@@ -1304,7 +1304,11 @@ app.post("/api/attendance", async (req, res) => {
     if (!student) throw { status: 404, message: "Siswa tidak ditemukan" };
     if (student.status_active !== "aktif")
       throw { status: 400, message: "Siswa tidak aktif" };
-    
+     // ✅ Auto-register scanner agar scanner_id dari Portal Guru tidak melanggar foreign key
+ await connection.query(
+   "INSERT IGNORE INTO scanners (scanner_id, scanner_name, location, status_active) VALUES (?, ?, ?, 1)",
+   [scanner_id, `Scanner ${scanner_id}`, "Portal Guru"],
+ );
     const config = Object.fromEntries(
       settingsRows.map((s) => [s.setting_key, s.setting_value]),
     );
