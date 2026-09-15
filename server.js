@@ -225,18 +225,61 @@ let lastAbsentRunDate = null;
 //async function absentSchedulerTick() {
 
 function excelDateToFormatted(value) {
-  if (value === undefined || value === null || value === "") {
+  if (value === undefined || value === null || value === "") return null;
+
+  // 1) Serial angka Excel → YYYY-MM-DD
+  if (typeof value === "number" && isFinite(value)) {
+    if (value <= 0 || value > 2958465) return null;
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (!parsed || !parsed.y || !parsed.m || !parsed.d) return null;
+    if (parsed.y < 1900 || parsed.y > new Date().getFullYear()) return null;
+    return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}`;
+  }
+
+  const s = String(value).trim();
+  if (!s) return null;
+
+  // 2) Sudah format YYYY-MM-DD atau YYYY/MM/DD
+  let m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (m) {
+    const y = Number(m[1]);
+    if (y >= 1900 && y <= new Date().getFullYear())
+      return `${y}-${String(m[2]).padStart(2, "0")}-${String(m[3]).padStart(2, "0")}`;
     return null;
   }
-  if (typeof value === "number") {
-    const parsed = XLSX.SSF.parse_date_code(value);
-    if (!parsed) return null;
-    const day = String(parsed.d).padStart(2, "0");
-    const month = String(parsed.m).padStart(2, "0");
-    const year = String(parsed.y);
-    return `${day}/${month}/${year}`;
+
+  // 3) Format Indonesia: dd/mm/yyyy atau dd-mm-yy
+  m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})/);
+  if (m) {
+    let d = Number(m[1]), mo = Number(m[2]), y = Number(m[3]);
+    if (m[3].length === 2) y += y > 50 ? 1900 : 2000;
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && y >= 1900 && y <= new Date().getFullYear())
+      return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    return null;
   }
-  return String(value).trim();
+
+  // 4) Format "30 November 2010"
+  m = s.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/);
+  if (m) {
+    const MONTH_MAP = { januari:1, jan:1, februari:2, feb:2, maret:3, mar:3, april:4, apr:4, mei:5, juni:6, jun:6, juli:7, jul:7, agustus:8, agu:8, ags:8, september:9, sep:9, oktober:10, okt:10, november:11, nov:11, desember:12, des:12, dec:12 };
+    const mo = MONTH_MAP[m[2].toLowerCase()];
+    const y = Number(m[3]);
+    if (mo && y >= 1900 && y <= new Date().getFullYear())
+      return `${y}-${String(mo).padStart(2, "0")}-${String(m[1]).padStart(2, "0")}`;
+    return null;
+  }
+
+  // 5) Serial Excel yang terbaca sebagai teks
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    const num = parseFloat(s);
+    if (num > 0 && num <= 2958465) {
+      const parsed = XLSX.SSF.parse_date_code(num);
+      if (parsed && parsed.y >= 1900 && parsed.y <= new Date().getFullYear())
+        return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}`;
+    }
+  }
+
+  return null; // tidak bisa dibaca → simpan NULL (bukan 0000-00-00)
 }
 
 // ==========================================
@@ -4748,6 +4791,129 @@ app.post("/api/admin/wa-resend", verifyAdminApiKey, async (req, res) => {
   } catch (error) {
     console.error("WA RESEND ERROR:", error);
     res.status(500).json({ success: false, message: "Gagal kirim ulang WA", error: error.message });
+  }
+});
+// ============ CETAK KARTU QR UKURAN KTP (85,6 x 54 mm) ============
+app.get("/api/export/qr-cards", async (req, res) => {
+  try {
+    const { classId = "", ids = "", telp = "1", alamat = "1" } = req.query;
+    const showTelp = telp !== "0";
+    const showAlamat = alamat !== "0";
+    const esc = (v) => String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+
+    let rows = [];
+    if (ids) {
+      const idList = String(ids).split(",").map((s) => s.trim()).filter(Boolean);
+      if (idList.length) {
+        [rows] = await pool.query(
+          `SELECT student_id, nis, nisn, student_name, class_id, parent_phone, address, qr_code
+           FROM students WHERE student_id IN (?) ORDER BY class_id ASC, student_name ASC`,
+          [idList],
+        );
+      }
+    } else if (classId) {
+      [rows] = await pool.query(
+        `SELECT student_id, nis, nisn, student_name, class_id, parent_phone, address, qr_code
+         FROM students WHERE class_id = ? AND status_active = 'aktif' ORDER BY student_name ASC`,
+        [classId],
+      );
+    } else {
+      [rows] = await pool.query(
+        `SELECT student_id, nis, nisn, student_name, class_id, parent_phone, address, qr_code
+         FROM students WHERE status_active = 'aktif' ORDER BY class_id ASC, student_name ASC`,
+      );
+    }
+    if (!rows.length) return res.status(404).send("Tidak ada data siswa untuk dicetak.");
+
+    // Pastikan QR ada (generate otomatis bila belum)
+    const cards = [];
+    for (const s of rows) {
+      let qr = s.qr_code;
+      if (!qr || !String(qr).startsWith("data:image")) {
+        qr = await QRCode.toDataURL(s.student_id, { margin: 1, width: 220 });
+      }
+      cards.push({ ...s, qr });
+    }
+
+    const [setRows] = await pool.query("SELECT setting_key, setting_value FROM settings");
+    const cfg = Object.fromEntries(setRows.map((r) => [r.setting_key, r.setting_value]));
+    const schoolName = cfg.school_name || "MAN 2 Palembang";
+    const schoolYear = cfg.current_school_year || "2025/2026";
+    const semester = cfg.current_semester || "Ganjil";
+
+    const html = `<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8"/>
+<title>Kartu Absensi QR - ${esc(schoolName)}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 6mm; color: #111; background: #fff; }
+  .bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4mm; }
+  .bar h1 { font-size: 14pt; margin: 0; }
+  .bar .sub { font-size: 9pt; color: #555; margin-top: 2px; }
+  .btn { background: #2563eb; color: #fff; border: none; border-radius: 8px; padding: 8px 14px; font-weight: bold; cursor: pointer; }
+  .sheet { display: flex; flex-wrap: wrap; gap: 2.6mm; }
+  .card {
+    width: 85.6mm; height: 54mm; padding: 2.2mm 2.6mm;
+    border: 0.9pt dashed #94a3b8; border-radius: 2.8mm;
+    page-break-inside: avoid; break-inside: avoid; overflow: hidden; position: relative; background: #fff;
+  }
+  .head { display: flex; justify-content: space-between; align-items: center; border-bottom: 0.8pt solid #1e3a8a; padding-bottom: 1mm; margin-bottom: 1.4mm; }
+  .head .school { font-size: 6.8pt; font-weight: bold; color: #1e3a8a; letter-spacing: 0.2pt; }
+  .head .title { font-size: 6.2pt; font-weight: bold; color: #b45309; }
+  .body { display: flex; gap: 2.2mm; }
+  .qr { width: 25mm; height: 25mm; flex: 0 0 25mm; border: 0.6pt solid #cbd5e1; border-radius: 1.2mm; padding: 0.8mm; background: #fff; }
+  .qr img { width: 100%; height: 100%; display: block; }
+  .fields { flex: 1; min-width: 0; font-size: 6.6pt; line-height: 1.32; }
+  .row { display: flex; }
+  .lbl { flex: 0 0 13mm; color: #475569; font-weight: bold; }
+  .val { flex: 1; min-width: 0; font-weight: bold; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .alamat { margin-top: 0.6mm; font-size: 6pt; color: #334155; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .foot { position: absolute; left: 2.6mm; right: 2.6mm; bottom: 1.6mm; display: flex; justify-content: space-between; font-size: 5.6pt; color: #64748b; border-top: 0.6pt solid #e2e8f0; padding-top: 0.8mm; }
+  @media print {
+    body { padding: 0; }
+    .bar { display: none; }
+    @page { size: A4 portrait; margin: 6mm; }
+  }
+</style>
+</head>
+<body>
+<div class="bar">
+  <div>
+    <h1>🪪 Kartu Absensi QR — ${esc(schoolName)}</h1>
+    <div class="sub">Ukuran kartu KTP (85,6 × 54 mm) • ${cards.length} kartu • TA ${esc(schoolYear)} ${esc(semester)} — gunting sesuai garis putus-putus</div>
+  </div>
+  <button class="btn" onclick="window.print()">🖨 Cetak</button>
+</div>
+<div class="sheet">
+${cards.map((c) => `
+  <div class="card">
+    <div class="head">
+      <div class="school">${esc(schoolName.toUpperCase())}</div>
+      <div class="title">KARTU ABSENSI QR</div>
+    </div>
+    <div class="body">
+      <div class="qr"><img src="${c.qr}" alt="QR ${esc(c.student_id)}"/></div>
+      <div class="fields">
+        <div class="row"><span class="lbl">Nama</span><span class="val">: ${esc(c.student_name)}</span></div>
+        <div class="row"><span class="lbl">Kelas</span><span class="val">: ${esc(c.class_id)}</span></div>
+        <div class="row"><span class="lbl">NISN</span><span class="val">: ${esc(c.nisn || "-")}</span></div>
+        <div class="row"><span class="lbl">ID</span><span class="val">: ${esc(c.student_id)}</span></div>
+        ${showTelp ? `<div class="row"><span class="lbl">No. Telp</span><span class="val">: ${esc(c.parent_phone || "-")}</span></div>` : ""}
+        ${showAlamat && c.address ? `<div class="alamat">${esc(c.address)}</div>` : ""}
+      </div>
+    </div>
+    <div class="foot"><span>TA ${esc(schoolYear)} • ${esc(semester)}</span><span>${esc(c.class_id)} • ${esc(c.student_id)}</span></div>
+  </div>`).join("")}
+</div>
+</body>
+</html>`;
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(html);
+  } catch (error) {
+    console.error("EXPORT QR CARDS ERROR:", error);
+    res.status(500).send("Gagal membuat kartu QR");
   }
 });
 app.use(express.static(path.join(__dirname, "dist")));

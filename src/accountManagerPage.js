@@ -28,7 +28,8 @@ export function initAccountManagerPage() {
         <button id="amBulkReset" class="am-btn am-warn">🔑 Reset Password Terpilih</button>
         <button id="amBulkQr" class="am-btn am-ok">📱 Generate QR Terpilih</button>
         <button id="amPrintQr" class="am-btn">🖨️ Cetak Kartu QR</button>
-        <button id="amReload" class="am-btn">🔄 Muat Ulang</button>
+      <button id="amPrintCards" class="am-btn">🪪 Cetak Kartu</button>
+      <button id="amReload" class="am-btn">🔄 Muat Ulang</button>
       </div>
     </div>
     <div class="am-note">ℹ️ Klik judul kolom (⇅) untuk mengurutkan ▲/▼. Password terenkripsi — hanya bisa di-reset.</div>
@@ -39,6 +40,13 @@ export function initAccountManagerPage() {
   document.getElementById("amTabStudents").addEventListener("click", () => { _tab = "students"; setActiveTab(); renderTable(); });
   document.getElementById("amTabTeachers").addEventListener("click", () => { _tab = "teachers"; setActiveTab(); renderTable(); });
   document.getElementById("amReload").addEventListener("click", () => loadData());
+  document.getElementById("amPrintCards").addEventListener("click", () => {
+  const selected = getSelected();
+  const list = selected.length ? selected : _students.map((s) => s.student_id);
+  if (!list.length) return alert("Tidak ada data siswa untuk dicetak.");
+  if (!selected.length && !confirm(`Tidak ada centangan. Cetak kartu untuk ${list.length} siswa yang sedang tampil?`)) return;
+  window.open(`${API_URL}/api/export/qr-cards?ids=${encodeURIComponent(list.join(","))}`, "_blank");
+});
   document.getElementById("amBulkReset").addEventListener("click", bulkReset);
   document.getElementById("amBulkQr").addEventListener("click", bulkQr);
   document.getElementById("amPrintQr").addEventListener("click", printQrCards);

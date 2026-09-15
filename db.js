@@ -10,6 +10,7 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
+   dateStrings: true,   // ← TAMBAHKAN BARIS INI: DATE/DATETIME
   connectTimeout: 10000 // Tambahkan timeout 10 detik agar tidak hang selamanya
 });
 

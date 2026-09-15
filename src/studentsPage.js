@@ -188,7 +188,7 @@ async function openModal(data) {
   setVal("f_gender", data?.gender || "");
   setVal("f_class_id", data?.class_id || "");
   setVal("f_birth_place", data?.birth_place || "");
-  setVal("f_birth_date", data?.birth_date ? String(data.birth_date).slice(0, 10) : "");
+  setVal("f_birth_date", toDateInput(data?.birth_date));
   setVal("f_religion", data?.religion || "");
   setVal("f_entry_year", data?.entry_year || "");
   setVal("f_status_active", data?.status_active || "aktif");
@@ -210,7 +210,18 @@ async function openModal(data) {
   }
   document.getElementById("stdModalOverlay").style.display = "flex";
 }
-
+function toDateInput(v) {
+  if (!v) return "";
+  const s = String(v);
+  if (s.includes("T")) {
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) {
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    }
+  }
+  const m = s.match(/^\d{4}-\d{2}-\d{2}/);
+  return m ? m[0] : "";
+}
 function closeModal() {
   document.getElementById("stdModalOverlay").style.display = "none";
   _editingId = null;
