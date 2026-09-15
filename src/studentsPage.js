@@ -1,548 +1,309 @@
+// src/studentsPage.js — Data Siswa dengan Modal Tambah/Edit Lengkap
 import { API_URL } from "./config";
 
-let _classes = [];
 let _students = [];
-let _currentClassId = "";
+let _classes = [];
+let _editingId = null;
 
-function getAdminHeaders() {
-  return {
-    "Content-Type": "application/json",
-    "x-admin-key": localStorage.getItem("simAdminKey") || ""
-  };
-}
-
-function formatDateForInput(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toISOString().split("T")[0];
+function adminHeaders(withJson = true) {
+  const h = { "x-admin-key": localStorage.getItem("simAdminKey") || "" };
+  if (withJson) h["Content-Type"] = "application/json";
+  return h;
 }
 
 function esc(v) {
   return String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
-export async function initStudentsPage() {
-  const pageContainer = document.getElementById("studentsPageContent");
-  if (!pageContainer) return;
+const val = (id) => (document.getElementById(id)?.value || "").trim();
+const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v ?? ""; };
 
-  pageContainer.innerHTML = `
-    <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:20px;">
-      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:end;">
-        <div>
-          <label style="display:block; font-size:12px; font-weight:bold; color:#334155; margin-bottom:4px;">Cari Siswa</label>
-          <input id="studentKeyword" type="text" placeholder="Nama / NIS / NISN / ID siswa" style="padding:10px; min-width:240px; border:1px solid #d1d5db; border-radius:10px;" />
-        </div>
-        <div>
-          <label style="display:block; font-size:12px; font-weight:bold; color:#334155; margin-bottom:4px;">Filter Kelas</label>
-          <select id="studentClassFilter" style="padding:10px; min-width:180px; border:1px solid #d1d5db; border-radius:10px;">
-            <option value="">Semua Kelas</option>
-          </select>
-        </div>
-        <button id="btnSearchStudents" style="padding:10px 14px; border:none; background:#2563eb; color:white; border-radius:10px; cursor:pointer; font-weight:bold;">
-          🔍 Cari
-        </button>
-        <button id="btnResetFilter" style="padding:10px 14px; border:none; background:#e5e7eb; color:#0f172a; border-radius:10px; cursor:pointer; font-weight:bold;">
-          ↺ Reset
-        </button>
-      </div>
-      <button id="btnOpenStudentForm" style="padding:10px 14px; border:none; background:#16a34a; color:white; border-radius:10px; cursor:pointer; font-weight:bold;">
-        + Tambah Siswa
-      </button>
+export function initStudentsPage() {
+  injectStdStyles();
+  const box = document.getElementById("studentsPageContent");
+  if (!box) return;
+
+  box.innerHTML = `
+    <div class="std-toolbar">
+      <input id="stdKeyword" class="std-input" placeholder="🔍 Cari nama / NIS / NISN / ID..." />
+      <select id="stdClassFilter" class="std-input"><option value="">Semua Kelas</option></select>
+      <select id="stdStatusFilter" class="std-input">
+        <option value="">Semua Status</option>
+        <option value="aktif">Aktif</option>
+        <option value="nonaktif">Nonaktif</option>
+      </select>
+      <button id="stdSearchBtn" class="std-btn std-btn-primary">Cari</button>
+      <button id="stdResetBtn" class="std-btn">Reset</button>
+      <span style="flex:1"></span>
+      <button id="stdAddBtn" class="std-btn std-btn-success">➕ Tambah Siswa</button>
     </div>
+    <div id="stdCount" class="std-count"></div>
+    <div id="stdTableWrap" class="std-table-wrap">Memuat data...</div>
 
-    <div id="studentsResultMessage" style="margin-bottom:16px;"></div>
-    <div id="studentsInfoCards" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:10px; margin-bottom:16px;"></div>
-    <div id="studentFormWrap" style="display:none; margin-bottom:24px; background:#f8fafc; border:1px solid #e5e7eb; border-radius:16px; padding:20px;"></div>
+    <!-- ===== MODAL TAMBAH / EDIT ===== -->
+    <div id="stdModalOverlay" class="std-overlay" style="display:none;">
+      <div class="std-modal">
+        <div class="std-modal-head">
+          <h3 id="stdModalTitle">➕ Tambah Siswa</h3>
+          <button id="stdModalClose" class="std-x" title="Tutup">✕</button>
+        </div>
+        <div class="std-modal-body">
+          <div class="std-section">🧑‍🎓 Data Siswa</div>
+          <div class="std-grid">
+            <div><label class="std-label">Student ID</label><input id="f_student_id" class="std-input" readonly /></div>
+            <div><label class="std-label">NIS</label><input id="f_nis" class="std-input" /></div>
+            <div><label class="std-label">NISN * <small>(username login)</small></label><input id="f_nisn" class="std-input" /></div>
+            <div><label class="std-label">Nama Lengkap *</label><input id="f_student_name" class="std-input" /></div>
+            <div><label class="std-label">Jenis Kelamin</label>
+              <select id="f_gender" class="std-input"><option value="">-</option><option value="L">Laki-laki</option><option value="P">Perempuan</option></select></div>
+            <div><label class="std-label">Kelas *</label><select id="f_class_id" class="std-input"><option value="">Pilih Kelas</option></select></div>
+            <div><label class="std-label">Tempat Lahir</label><input id="f_birth_place" class="std-input" /></div>
+            <div><label class="std-label">Tanggal Lahir</label><input type="date" id="f_birth_date" class="std-input" /></div>
+            <div><label class="std-label">Agama</label>
+              <select id="f_religion" class="std-input"><option value="">-</option><option>Islam</option><option>Kristen</option><option>Katolik</option><option>Hindu</option><option>Buddha</option><option>Konghucu</option></select></div>
+            <div><label class="std-label">Tahun Masuk</label><input id="f_entry_year" class="std-input" placeholder="2026" maxlength="4" /></div>
+            <div><label class="std-label">Status</label>
+              <select id="f_status_active" class="std-input"><option value="aktif">Aktif</option><option value="nonaktif">Nonaktif</option></select></div>
+            <div style="grid-column:1/-1;"><label class="std-label">Alamat</label><textarea id="f_address" class="std-input" rows="2"></textarea></div>
+          </div>
 
-    <div style="overflow:auto; border:1px solid #e5e7eb; border-radius:16px;">
-      <table style="width:100%; border-collapse:collapse; min-width:1100px;">
-        <thead style="background:#0f172a; color:white;">
-          <tr>
-            <th style="padding:12px; text-align:left;">Student ID</th>
-            <th style="padding:12px; text-align:left;">Nama</th>
-            <th style="padding:12px; text-align:left;">NIS</th>
-            <th style="padding:12px; text-align:left;">NISN</th>
-            <th style="padding:12px; text-align:left;">Kelas</th>
-            <th style="padding:12px; text-align:left;">JK</th>
-            <th style="padding:12px; text-align:left;">No HP Ortu</th>
-            <th style="padding:12px; text-align:left;">Status</th>
-            <th style="padding:12px; text-align:center;">Aksi</th>
-          </tr>
-        </thead>
-        <tbody id="studentsTableBody">
-          <tr><td colspan="9" style="padding:16px; text-align:center;">Memuat data siswa...</td></tr>
-        </tbody>
-      </table>
+          <div class="std-section">👨‍👩‍👧 Data Orang Tua / Wali</div>
+          <div class="std-grid">
+            <div><label class="std-label">Nama Ortu/Wali</label><input id="f_parent_name" class="std-input" /></div>
+            <div><label class="std-label">No HP Ortu (WA)</label><input id="f_parent_phone" class="std-input" placeholder="628..." /></div>
+            <div><label class="std-label">Email Ortu</label><input id="f_parent_email" class="std-input" /></div>
+            <div><label class="std-label">Relasi</label>
+              <select id="f_parent_relation" class="std-input"><option value="">-</option><option value="ayah">Ayah</option><option value="ibu">Ibu</option><option value="wali">Wali</option></select></div>
+          </div>
+
+          <div class="std-section">🔐 Akun</div>
+          <div class="std-grid">
+            <div><label class="std-label">Password Baru <small>(kosongkan jika tidak diubah)</small></label><input type="password" id="f_password" class="std-input" /></div>
+            <div class="std-hint">ℹ️ Username login = <b>NISN</b>. Password default siswa baru: <b>default12345</b>.</div>
+          </div>
+        </div>
+        <div class="std-modal-foot">
+          <button id="stdSave" class="std-btn std-btn-primary">💾 Simpan</button>
+          <button id="stdCancel" class="std-btn">Batal</button>
+        </div>
+      </div>
     </div>
   `;
 
-  await loadClasses();
-  await loadStudents();
-
-  document.getElementById("btnSearchStudents")?.addEventListener("click", loadStudents);
-  document.getElementById("btnResetFilter")?.addEventListener("click", () => {
-    document.getElementById("studentKeyword").value = "";
-    document.getElementById("studentClassFilter").value = "";
+  document.getElementById("stdSearchBtn").addEventListener("click", loadStudents);
+  document.getElementById("stdResetBtn").addEventListener("click", () => {
+    setVal("stdKeyword", ""); setVal("stdClassFilter", ""); setVal("stdStatusFilter", "");
     loadStudents();
   });
-  document.getElementById("studentClassFilter")?.addEventListener("change", loadStudents);
-  document.getElementById("studentKeyword")?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") loadStudents();
+  document.getElementById("stdClassFilter").addEventListener("change", loadStudents);
+  document.getElementById("stdStatusFilter").addEventListener("change", loadStudents);
+  document.getElementById("stdKeyword").addEventListener("keydown", (e) => { if (e.key === "Enter") loadStudents(); });
+  document.getElementById("stdAddBtn").addEventListener("click", () => openModal(null));
+  document.getElementById("stdModalClose").addEventListener("click", closeModal);
+  document.getElementById("stdCancel").addEventListener("click", closeModal);
+  document.getElementById("stdModalOverlay").addEventListener("click", (e) => { if (e.target.id === "stdModalOverlay") closeModal(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+  document.getElementById("stdSave").addEventListener("click", saveStudent);
+
+  box.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-std-action]");
+    if (!btn) return;
+    const id = btn.dataset.id;
+    const row = _students.find((s) => s.student_id === id);
+    if (!row) return;
+    if (btn.dataset.stdAction === "edit") openModal(row);
+    if (btn.dataset.stdAction === "del") deleteStudent(id, row.student_name);
   });
-  document.getElementById("btnOpenStudentForm")?.addEventListener("click", async () => {
-    await renderForm();
-  });
+
+  loadClasses().then(() => loadStudents());
 }
 
 async function loadClasses() {
   try {
-    const response = await fetch(`${API_URL}/api/classes`, {
-      headers: { "x-admin-key": localStorage.getItem("simAdminKey") || "" }
-    });
-    const result = await response.json();
-    _classes = result.data || [];
-    const sel = document.getElementById("studentClassFilter");
-    if (!sel) return;
-    sel.innerHTML = `<option value="">Semua Kelas</option>` +
-      _classes.map(c => `<option value="${esc(c.class_id)}">${esc(c.class_name || c.class_id)}</option>`).join("");
-  } catch (error) {
-    console.error("Load classes error:", error);
-  }
-}
-
-function showMessage(message, type = "success") {
-  const resultMessage = document.getElementById("studentsResultMessage");
-  if (!resultMessage) return;
-  resultMessage.innerHTML = `
-    <div style="padding:12px 14px; border-radius:10px;
-      background:${type === "success" ? "#dcfce7" : "#fee2e2"};
-      color:${type === "success" ? "#166534" : "#991b1b"};
-      border:1px solid ${type === "success" ? "#bbf7d0" : "#fecaca"};">
-      ${message}
-    </div>`;
-}
-
-function renderInfoCards(students) {
-  const box = document.getElementById("studentsInfoCards");
-  if (!box) return;
-  const classId = document.getElementById("studentClassFilter")?.value || "";
-  const classInfo = _classes.find(c => c.class_id === classId);
-  const waliKelas = classInfo ? (classInfo.wali_kelas_name || "-") : "— (semua kelas)";
-  const nipWali = classInfo ? (classInfo.wali_kelas_nip || "") : "";
-  const totalL = students.filter(s => s.gender === "L").length;
-  const totalP = students.filter(s => s.gender === "P").length;
-  const tanpaJK = students.filter(s => !s.gender).length;
-
-  box.innerHTML = `
-    <div style="padding:14px; background:#e0f2fe; border-radius:12px; text-align:center;">
-      <b style="display:block; font-size:12px; color:#334155; margin-bottom:4px;">Kelas</b>
-      <span style="font-size:18px; font-weight:bold; color:#0f172a;">${esc(classId || "Semua")}</span>
-    </div>
-    <div style="padding:14px; background:#fef9c3; border-radius:12px; text-align:center;">
-      <b style="display:block; font-size:12px; color:#334155; margin-bottom:4px;">Wali Kelas</b>
-      <span style="font-size:14px; font-weight:bold; color:#0f172a;">${esc(waliKelas)}</span>
-      ${nipWali ? `<div style="font-size:11px; color:#64748b; margin-top:2px;">NIP: ${esc(nipWali)}</div>` : ""}
-    </div>
-    <div style="padding:14px; background:#dcfce7; border-radius:12px; text-align:center;">
-      <b style="display:block; font-size:12px; color:#334155; margin-bottom:4px;">Total Siswa</b>
-      <span style="font-size:22px; font-weight:bold; color:#0f172a;">${students.length}</span>
-    </div>
-    <div style="padding:14px; background:#dbeafe; border-radius:12px; text-align:center;">
-      <b style="display:block; font-size:12px; color:#334155; margin-bottom:4px;">Laki-laki</b>
-      <span style="font-size:22px; font-weight:bold; color:#1e40af;">${totalL}</span>
-    </div>
-    <div style="padding:14px; background:#fce7f3; border-radius:12px; text-align:center;">
-      <b style="display:block; font-size:12px; color:#334155; margin-bottom:4px;">Perempuan</b>
-      <span style="font-size:22px; font-weight:bold; color:#be185d;">${totalP}</span>
-    </div>
-    ${tanpaJK > 0 ? `
-    <div style="padding:14px; background:#fee2e2; border-radius:12px; text-align:center;">
-      <b style="display:block; font-size:12px; color:#334155; margin-bottom:4px;">JK Belum Diisi</b>
-      <span style="font-size:22px; font-weight:bold; color:#991b1b;">${tanpaJK}</span>
-    </div>` : ""}
-  `;
-}
-
-async function loadClassDropdownOptions(selectedClassId = "") {
-  try {
-    if (_classes.length === 0) await loadClasses();
-    return _classes.map(item => {
-      const selected = item.class_id === selectedClassId ? "selected" : "";
-      return `<option value="${item.class_id}" ${selected}>${item.class_name || item.class_id}</option>`;
-    }).join("");
-  } catch (error) {
-    console.error("Load class options error:", error);
-    return "";
-  }
-}
-
-async function renderForm(data = null) {
-  const formWrap = document.getElementById("studentFormWrap");
-  if (!formWrap) return;
-  const isEdit = !!data;
-  const classOptionsHtml = await loadClassDropdownOptions(data?.class_id || "");
-
-  formWrap.style.display = "block";
-  formWrap.innerHTML = `
-    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:16px;">
-      <h3 style="margin:0;">${isEdit ? "Edit Siswa" : "Tambah Siswa"}</h3>
-      <button id="btnCloseStudentForm" style="border:none; background:#e5e7eb; padding:8px 12px; border-radius:8px; cursor:pointer;">Tutup</button>
-    </div>
-    <div style="display:grid; grid-template-columns:repeat(2, minmax(260px, 1fr)); gap:14px 18px;">
-      <div>
-        <label><b>Student ID</b></label>
-        <input id="form_student_id" ${isEdit ? "disabled" : ""} value="${data?.student_id || ""}" style="width:100%; padding:10px; margin-top:6px; border:1px solid #d1d5db; border-radius:10px;" />
-      </div>
-      <div>
-        <label><b>Nama Siswa *</b></label>
-        <input id="form_student_name" value="${esc(data?.student_name || "")}" style="width:100%; padding:10px; margin-top:6px; border:1px solid #d1d5db; border-radius:10px;" />
-      </div>
-      <div>
-        <label><b>NIS</b></label>
-        <input id="form_nis" value="${esc(data?.nis || "")}" style="width:100%; padding:10px; margin-top:6px; border:1px solid #d1d5db; border-radius:10px;" />
-      </div>
-      <div>
-        <label><b>NISN *</b></label>
-        <input id="form_nisn" value="${esc(data?.nisn || "")}" style="width:100%; padding:10px; margin-top:6px; border:1px solid #d1d5db; border-radius:10px;" />
-      </div>
-      <div style="grid-column:1 / -1; padding:12px 14px; background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; color:#1e40af;">
-        <b>Info Akun Siswa:</b><br />Username otomatis menggunakan <b>NISN</b>.<br />Password default: <b>default12345</b>
-      </div>
-      <div>
-        <label><b>Jenis Kelamin *</b></label>
-        <select id="form_gender" style="width:100%; padding:10px; margin-top:6px; border:1px solid #d1d5db; border-radius:10px;">
-          <option value="">Pilih</option>
-          <option value="L" ${data?.gender === "L" ? "selected" : ""}>Laki-laki</option>
-          <option value="P" ${data?.gender === "P" ? "selected" : ""}>Perempuan</option>
-        </select>
-      </div>
-      <div>
-        <label><b>Kelas *</b></label>
-        <select id="form_class_id" style="width:100%; padding:10px; margin-top:6px; border:1px solid #d1d5db; border-radius:10px;">
-          <option value="">Pilih Kelas</option>
-          ${classOptionsHtml}
-        </select>
-      </div>
-      <div>
-        <label><b>Tempat Lahir</b></label>
-        <input id="form_birth_place" value="${esc(data?.birth_place || "")}" style="width:100%; padding:10px; margin-top:6px; border:1px solid #d1d5db; border-radius:10px;" />
-      </div>
-      <div>
-        <label><b>Tanggal Lahir</b></label>
-        <input id="form_birth_date" type="date" value="${formatDateForInput(data?.birth_date)}" style="width:100%; padding:10px; margin-top:6px; border:1px solid #d1d5db; border-radius:10px;" />
-      </div>
-      <div>
-        <label><b>Agama</b></label>
-        <select id="form_religion" style="width:100%; padding:10px; margin-top:6px; border:1px solid #d1d5db; border-radius:10px;">
-          <option value="">Pilih Agama</option>
-          <option value="Islam" ${data?.religion === "Islam" || data?.religion === "islam" ? "selected" : ""}>Islam</option>
-          <option value="Kristen" ${data?.religion === "Kristen" ? "selected" : ""}>Kristen</option>
-          <option value="Katolik" ${data?.religion === "Katolik" ? "selected" : ""}>Katolik</option>
-          <option value="Hindu" ${data?.religion === "Hindu" ? "selected" : ""}>Hindu</option>
-          <option value="Buddha" ${data?.religion === "Buddha" ? "selected" : ""}>Buddha</option>
-          <option value="Konghucu" ${data?.religion === "Konghucu" ? "selected" : ""}>Konghucu</option>
-        </select>
-      </div>
-      <div>
-        <label><b>Tahun Masuk</b></label>
-        <input id="form_entry_year" value="${esc(data?.entry_year || "")}" style="width:100%; padding:10px; margin-top:6px; border:1px solid #d1d5db; border-radius:10px;" />
-      </div>
-      <div>
-        <label><b>Nama Orang Tua</b></label>
-        <input id="form_parent_name" value="${esc(data?.parent_name || "")}" style="width:100%; padding:10px; margin-top:6px; border:1px solid #d1d5db; border-radius:10px;" />
-      </div>
-      <div>
-        <label><b>No HP Orang Tua</b></label>
-        <input id="form_parent_phone" value="${esc(data?.parent_phone || "")}" style="width:100%; padding:10px; margin-top:6px; border:1px solid #d1d5db; border-radius:10px;" />
-      </div>
-      <div>
-        <label><b>Email Orang Tua</b></label>
-        <input id="form_parent_email" value="${esc(data?.parent_email || "")}" style="width:100%; padding:10px; margin-top:6px; border:1px solid #d1d5db; border-radius:10px;" />
-      </div>
-      <div>
-        <label><b>Relasi</b></label>
-        <select id="form_parent_relation" style="width:100%; padding:10px; margin-top:6px; border:1px solid #d1d5db; border-radius:10px;">
-          <option value="">Pilih</option>
-          <option value="ayah" ${data?.parent_relation === "ayah" ? "selected" : ""}>Ayah</option>
-          <option value="ibu" ${data?.parent_relation === "ibu" ? "selected" : ""}>Ibu</option>
-          <option value="wali" ${data?.parent_relation === "wali" ? "selected" : ""}>Wali</option>
-        </select>
-      </div>
-      <div style="grid-column:1 / -1;">
-        <label><b>Alamat</b></label>
-        <textarea id="form_address" rows="3" style="width:100%; padding:10px; margin-top:6px; border:1px solid #d1d5db; border-radius:10px;">${esc(data?.address || "")}</textarea>
-      </div>
-      <div>
-        <label><b>Status</b></label>
-        <select id="form_status_active" style="width:100%; padding:10px; margin-top:6px; border:1px solid #d1d5db; border-radius:10px;">
-          <option value="aktif" ${data?.status_active === "aktif" || !data?.status_active ? "selected" : ""}>Aktif</option>
-          <option value="nonaktif" ${data?.status_active === "nonaktif" ? "selected" : ""}>Nonaktif</option>
-        </select>
-      </div>
-    </div>
-    <div style="margin-top:18px; display:flex; gap:10px; flex-wrap:wrap;">
-      <button id="btnSaveStudent" style="padding:10px 16px; border:none; background:#2563eb; color:white; border-radius:10px; cursor:pointer; font-weight:bold;">
-        ${isEdit ? "Update Siswa" : "Simpan Siswa"}
-      </button>
-    </div>
-  `;
-
-  if (!isEdit) generateStudentId();
-
-  if (data?.qr_code && data.qr_code.startsWith("data:image")) {
-    const qrPreview = document.createElement("div");
-    qrPreview.style.marginTop = "20px";
-    qrPreview.innerHTML = `
-      <div style="padding:16px; background:white; border:1px solid #e5e7eb; border-radius:14px;">
-        <div style="font-weight:bold; margin-bottom:10px;">QR Code Siswa</div>
-        <img src="${data.qr_code}" alt="QR Code ${data.student_id}"
-          style="max-width:180px; width:100%; border:1px solid #e5e7eb; border-radius:10px; padding:10px; background:white;" />
-      </div>`;
-    formWrap.appendChild(qrPreview);
-  }
-
-  document.getElementById("btnCloseStudentForm")?.addEventListener("click", () => {
-    formWrap.style.display = "none";
-    formWrap.innerHTML = "";
-  });
-
-  document.getElementById("btnSaveStudent")?.addEventListener("click", async () => {
-    try {
-      const payload = {
-        student_id: document.getElementById("form_student_id")?.value.trim(),
-        student_name: document.getElementById("form_student_name")?.value.trim(),
-        nis: document.getElementById("form_nis")?.value.trim(),
-        nisn: document.getElementById("form_nisn")?.value.trim(),
-        gender: document.getElementById("form_gender")?.value,
-        class_id: document.getElementById("form_class_id")?.value.trim(),
-        birth_place: document.getElementById("form_birth_place")?.value.trim(),
-        birth_date: document.getElementById("form_birth_date")?.value,
-        religion: document.getElementById("form_religion")?.value.trim(),
-        entry_year: document.getElementById("form_entry_year")?.value.trim(),
-        parent_name: document.getElementById("form_parent_name")?.value.trim(),
-        parent_phone: document.getElementById("form_parent_phone")?.value.trim().replace(/\s+/g, ""),
-        parent_email: document.getElementById("form_parent_email")?.value.trim(),
-        parent_relation: document.getElementById("form_parent_relation")?.value,
-        address: document.getElementById("form_address")?.value.trim(),
-        status_active: document.getElementById("form_status_active")?.value
-      };
-
-      const validationMessage = validateStudentPayload(payload, isEdit);
-      if (validationMessage) {
-        showMessage(validationMessage, "error");
-        return;
-      }
-
-      const url = isEdit
-        ? `${API_URL}/api/students/${data.student_id}`
-        : `${API_URL}/api/students`;
-      const method = isEdit ? "PUT" : "POST";
-
-      const response = await fetch(url, {
-        method,
-        headers: getAdminHeaders(),
-        body: JSON.stringify(payload)
-      });
-      const result = await response.json();
-
-      if (!result.success) {
-        showMessage(result.message || "Gagal menyimpan data siswa", "error");
-        return;
-      }
-
-      showMessage(result.message || "Data siswa berhasil disimpan", "success");
-      formWrap.style.display = "none";
-      formWrap.innerHTML = "";
-      await loadStudents();
-    } catch (error) {
-      console.error("Save student error:", error);
-      showMessage("Terjadi kesalahan saat menyimpan data siswa", "error");
-    }
-  });
-}
-
-async function generateStudentId() {
-  try {
-    const response = await fetch(`${API_URL}/api/students/generate-id`, {
-      headers: { "x-admin-key": localStorage.getItem("simAdminKey") || "" }
-    });
-    const result = await response.json();
-    if (result.success) {
-      const input = document.getElementById("form_student_id");
-      if (input) input.value = result.student_id;
-    }
-  } catch (error) {
-    console.error("Generate ID error:", error);
-  }
-}
-
-function validateStudentPayload(payload, isEdit = false) {
-  if (!isEdit && !payload.student_id) return "Student ID wajib diisi.";
-  if (!payload.student_name) return "Nama siswa wajib diisi.";
-  if (!payload.nisn) return "NISN wajib diisi karena akan digunakan sebagai username siswa.";
-  if (!payload.class_id) return "Kelas wajib diisi.";
-  if (!payload.gender) return "Jenis kelamin wajib dipilih.";
-  if (payload.entry_year) {
-    const yearText = String(payload.entry_year).trim();
-    if (!/^\d{4}$/.test(yearText)) return "Tahun masuk harus 4 digit, contoh: 2024.";
-  }
-  if (payload.parent_phone) {
-    const phone = String(payload.parent_phone).replace(/\s+/g, "");
-    if (!/^\d+$/.test(phone)) return "No HP orang tua hanya boleh angka.";
-  }
-  if (payload.birth_date) {
-    const selectedDate = new Date(payload.birth_date);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    if (Number.isNaN(selectedDate.getTime())) return "Tanggal lahir tidak valid.";
-    if (selectedDate > today) return "Tanggal lahir tidak boleh melebihi hari ini.";
-  }
-  return null;
-}
-
-function renderQrPreview(studentId, qrCode) {
-  const formWrap = document.getElementById("studentFormWrap");
-  if (!formWrap) return;
-  formWrap.style.display = "block";
-  formWrap.innerHTML = `
-    <div style="background:#f8fafc; border:1px solid #e5e7eb; border-radius:16px; padding:20px; text-align:center;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-        <h3 style="margin:0;">QR Code Siswa</h3>
-        <button id="btnCloseQrPreview" style="border:none; background:#e5e7eb; padding:8px 12px; border-radius:8px; cursor:pointer;">Tutup</button>
-      </div>
-      <p style="margin-bottom:16px; color:#475569;">Student ID: <b>${studentId}</b></p>
-      <div style="background:white; border:1px solid #e5e7eb; border-radius:16px; padding:20px; display:inline-block;">
-        <img src="${qrCode}" alt="QR Code ${studentId}" style="max-width:220px; width:100%;" />
-      </div>
-      <div style="margin-top:16px;">
-        <a href="${qrCode}" download="${studentId}.png" style="display:inline-block; padding:10px 14px; background:#16a34a; color:white; text-decoration:none; border-radius:10px;">
-          Download QR
-        </a>
-      </div>
-    </div>`;
-  document.getElementById("btnCloseQrPreview")?.addEventListener("click", () => {
-    formWrap.style.display = "none";
-    formWrap.innerHTML = "";
-  });
+    const res = await fetch(`${API_URL}/api/classes`, { headers: adminHeaders(false) });
+    const r = await res.json();
+    _classes = r.data || [];
+    const sel = document.getElementById("stdClassFilter");
+    sel.innerHTML = `<option value="">Semua Kelas</option>` + _classes.map((c) => `<option value="${esc(c.class_id)}">${esc(c.class_name || c.class_id)}</option>`).join("");
+    const fsel = document.getElementById("f_class_id");
+    fsel.innerHTML = `<option value="">Pilih Kelas</option>` + _classes.map((c) => `<option value="${esc(c.class_id)}">${esc(c.class_name || c.class_id)}</option>`).join("");
+  } catch (e) { /* abaikan */ }
 }
 
 async function loadStudents() {
-  const tbody = document.getElementById("studentsTableBody");
-  if (!tbody) return;
-  const keyword = document.getElementById("studentKeyword")?.value.trim() || "";
-  const classId = document.getElementById("studentClassFilter")?.value.trim() || "";
-  _currentClassId = classId;
-
-  tbody.innerHTML = `<tr><td colspan="9" style="padding:16px; text-align:center;">Memuat data siswa...</td></tr>`;
-
+  const keyword = val("stdKeyword");
+  const classId = val("stdClassFilter");
+  const status = val("stdStatusFilter");
+  const wrap = document.getElementById("stdTableWrap");
+  wrap.innerHTML = `<div class="std-loading">Memuat data...</div>`;
+  const params = new URLSearchParams();
+  if (keyword) params.set("keyword", keyword);
+  if (classId) params.set("classId", classId);
+  if (status) params.set("status", status);
   try {
-    const params = new URLSearchParams();
-    if (keyword) params.append("keyword", keyword);
-    if (classId) params.append("classId", classId);
-
-    const response = await fetch(`${API_URL}/api/students?${params.toString()}`, {
-      headers: { "x-admin-key": localStorage.getItem("simAdminKey") || "" }
-    });
-    const result = await response.json();
-
-    if (!result.success) {
-      tbody.innerHTML = `<tr><td colspan="9" style="padding:16px; text-align:center; color:red;">${result.message || "Gagal memuat data"}</td></tr>`;
-      return;
-    }
-
-    _students = result.data || [];
-    renderInfoCards(_students);
-
-    if (_students.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="9" style="padding:16px; text-align:center;">Belum ada data siswa.</td></tr>`;
-      return;
-    }
-
-    tbody.innerHTML = _students.map(student => `
-      <tr>
-        <td style="padding:12px; border-top:1px solid #e5e7eb;">${esc(student.student_id || "-")}</td>
-        <td style="padding:12px; border-top:1px solid #e5e7eb;">${esc(student.student_name || "-")}</td>
-        <td style="padding:12px; border-top:1px solid #e5e7eb;">${esc(student.nis || "-")}</td>
-        <td style="padding:12px; border-top:1px solid #e5e7eb;">${esc(student.nisn || "-")}</td>
-        <td style="padding:12px; border-top:1px solid #e5e7eb;">${esc(student.class_id || "-")}</td>
-        <td style="padding:12px; border-top:1px solid #e5e7eb;">${esc(student.gender || "-")}</td>
-        <td style="padding:12px; border-top:1px solid #e5e7eb;">${esc(student.parent_phone || "-")}</td>
-        <td style="padding:12px; border-top:1px solid #e5e7eb;">${esc(student.status_active || "-")}</td>
-        <td style="padding:12px; border-top:1px solid #e5e7eb; text-align:center;">
-          <button class="btn-edit-student" data-id="${esc(student.student_id)}" style="padding:6px 10px; border:none; background:#f59e0b; color:white; border-radius:8px; cursor:pointer; margin-right:6px;">Edit</button>
-          <button class="btn-generate-qr" data-id="${esc(student.student_id)}" style="padding:6px 10px; border:none; background:#2563eb; color:white; border-radius:8px; cursor:pointer; margin-right:6px;">QR</button>
-          <button class="btn-delete-student" data-id="${esc(student.student_id)}" style="padding:6px 10px; border:none; background:#dc2626; color:white; border-radius:8px; cursor:pointer;">Hapus</button>
-        </td>
-      </tr>`).join("");
-
-    document.querySelectorAll(".btn-edit-student").forEach(button => {
-      button.addEventListener("click", async () => {
-        const studentId = button.dataset.id;
-        try {
-          const response = await fetch(`${API_URL}/api/students/${studentId}?t=${Date.now()}`, {
-            headers: { "x-admin-key": localStorage.getItem("simAdminKey") || "" }
-          });
-          const result = await response.json();
-          if (!result.success) {
-            showMessage(result.message || "Gagal mengambil detail siswa", "error");
-            return;
-          }
-          await renderForm(result.data);
-        } catch (error) {
-          console.error("Load student detail error:", error);
-          showMessage("Terjadi kesalahan saat mengambil detail siswa", "error");
-        }
-      });
-    });
-
-    document.querySelectorAll(".btn-generate-qr").forEach(button => {
-      button.addEventListener("click", async () => {
-        const studentId = button.dataset.id;
-        try {
-          const response = await fetch(`${API_URL}/api/students/${studentId}/generate-qr`, {
-            method: "POST",
-            headers: { "x-admin-key": localStorage.getItem("simAdminKey") || "" }
-          });
-          const result = await response.json();
-          if (!result.success) {
-            showMessage(result.message || "Gagal membuat QR siswa", "error");
-            return;
-          }
-          showMessage(`QR Code untuk ${studentId} berhasil dibuat.`, "success");
-          await loadStudents();
-          renderQrPreview(studentId, result.data.qr_code);
-        } catch (error) {
-          console.error("Generate QR error:", error);
-          showMessage("Terjadi kesalahan saat membuat QR siswa", "error");
-        }
-      });
-    });
-
-    document.querySelectorAll(".btn-delete-student").forEach(button => {
-      button.addEventListener("click", async () => {
-        const studentId = button.dataset.id;
-        if (!confirm(`Yakin ingin menghapus siswa ${studentId}?`)) return;
-        try {
-          const response = await fetch(`${API_URL}/api/students/${studentId}`, {
-            method: "DELETE",
-            headers: { "x-admin-key": localStorage.getItem("simAdminKey") || "" }
-          });
-          const result = await response.json();
-          if (!result.success) {
-            showMessage(result.message || "Gagal menghapus siswa", "error");
-            return;
-          }
-          showMessage(result.message || "Data siswa berhasil dihapus", "success");
-          await loadStudents();
-        } catch (error) {
-          console.error("Delete student error:", error);
-          showMessage("Terjadi kesalahan saat menghapus siswa", "error");
-        }
-      });
-    });
-  } catch (error) {
-    console.error("Load students error:", error);
-    tbody.innerHTML = `<tr><td colspan="9" style="padding:16px; text-align:center; color:red;">Terjadi kesalahan saat memuat data siswa.</td></tr>`;
+    const res = await fetch(`${API_URL}/api/students?${params.toString()}`, { headers: adminHeaders(false) });
+    const r = await res.json();
+    if (!r.success) throw new Error(r.message);
+    _students = r.data || [];
+    renderTable();
+  } catch (e) {
+    wrap.innerHTML = `<div class="std-alert">❌ ${esc(e.message)}</div>`;
   }
+}
+
+function renderTable() {
+  const wrap = document.getElementById("stdTableWrap");
+  document.getElementById("stdCount").innerHTML = `Menampilkan <b>${_students.length}</b> siswa`;
+  if (!_students.length) { wrap.innerHTML = `<div class="std-empty">Tidak ada data siswa.</div>`; return; }
+  wrap.innerHTML = `
+    <table class="std-table">
+      <thead><tr>
+        <th>Student ID</th><th>Nama</th><th>NIS</th><th>NISN</th><th>Kelas</th><th>JK</th><th>No HP Ortu</th><th>Status</th><th>Aksi</th>
+      </tr></thead>
+      <tbody>${_students.map((s) => `
+        <tr>
+          <td>${esc(s.student_id)}</td>
+          <td><b>${esc(s.student_name)}</b></td>
+          <td>${esc(s.nis || "-")}</td>
+          <td>${esc(s.nisn || "-")}</td>
+          <td>${esc(s.class_id || "-")}</td>
+          <td>${esc(s.gender || "-")}</td>
+          <td>${esc(s.parent_phone || "-")}</td>
+          <td>${s.status_active === "aktif" ? `<span class="std-badge ok">aktif</span>` : `<span class="std-badge bad">nonaktif</span>`}</td>
+          <td>
+            <button class="std-btn std-btn-warn" data-std-action="edit" data-id="${esc(s.student_id)}">✏️ Edit</button>
+            <button class="std-btn std-btn-danger" data-std-action="del" data-id="${esc(s.student_id)}">🗑 Hapus</button>
+          </td>
+        </tr>`).join("")}
+      </tbody>
+    </table>`;
+}
+
+async function openModal(data) {
+  _editingId = data ? data.student_id : null;
+  document.getElementById("stdModalTitle").textContent = data ? `✏️ Edit Siswa — ${data.student_name}` : "➕ Tambah Siswa Baru";
+  setVal("f_nis", data?.nis || "");
+  setVal("f_nisn", data?.nisn || "");
+  setVal("f_student_name", data?.student_name || "");
+  setVal("f_gender", data?.gender || "");
+  setVal("f_class_id", data?.class_id || "");
+  setVal("f_birth_place", data?.birth_place || "");
+  setVal("f_birth_date", data?.birth_date ? String(data.birth_date).slice(0, 10) : "");
+  setVal("f_religion", data?.religion || "");
+  setVal("f_entry_year", data?.entry_year || "");
+  setVal("f_status_active", data?.status_active || "aktif");
+  setVal("f_address", data?.address || "");
+  setVal("f_parent_name", data?.parent_name || "");
+  setVal("f_parent_phone", data?.parent_phone || "");
+  setVal("f_parent_email", data?.parent_email || "");
+  setVal("f_parent_relation", data?.parent_relation || "");
+  setVal("f_password", "");
+  if (data) {
+    setVal("f_student_id", data.student_id);
+  } else {
+    setVal("f_student_id", "");
+    try {
+      const res = await fetch(`${API_URL}/api/students/generate-id`, { headers: adminHeaders(false) });
+      const r = await res.json();
+      if (r.success) setVal("f_student_id", r.student_id);
+    } catch (e) { /* abaikan */ }
+  }
+  document.getElementById("stdModalOverlay").style.display = "flex";
+}
+
+function closeModal() {
+  document.getElementById("stdModalOverlay").style.display = "none";
+  _editingId = null;
+}
+
+async function saveStudent() {
+  const payload = {
+    student_id: val("f_student_id"),
+    nis: val("f_nis"),
+    nisn: val("f_nisn"),
+    student_name: val("f_student_name"),
+    gender: val("f_gender"),
+    birth_place: val("f_birth_place"),
+    birth_date: val("f_birth_date") || null,
+    address: val("f_address"),
+    religion: val("f_religion"),
+    class_id: val("f_class_id"),
+    entry_year: val("f_entry_year"),
+    status_active: val("f_status_active"),
+    parent_name: val("f_parent_name"),
+    parent_phone: val("f_parent_phone"),
+    parent_email: val("f_parent_email"),
+    parent_relation: val("f_parent_relation"),
+  };
+  const pass = val("f_password");
+  if (pass) payload.password = pass;
+  if (!payload.student_name || !payload.nisn || !payload.class_id) {
+    alert("⚠️ Nama, NISN, dan Kelas wajib diisi.");
+    return;
+  }
+  const btn = document.getElementById("stdSave");
+  btn.disabled = true; btn.textContent = "⏳ Menyimpan...";
+  try {
+    const url = _editingId ? `${API_URL}/api/students/${encodeURIComponent(_editingId)}` : `${API_URL}/api/students`;
+    const res = await fetch(url, { method: _editingId ? "PUT" : "POST", headers: adminHeaders(), body: JSON.stringify(payload) });
+    const r = await res.json();
+    if (!r.success) throw new Error(r.message);
+    closeModal();
+    loadStudents();
+  } catch (e) {
+    alert("❌ " + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = "💾 Simpan";
+  }
+}
+
+async function deleteStudent(id, name) {
+  if (!confirm(`Hapus siswa "${name}" (${id})?\nTindakan tidak bisa dibatalkan.`)) return;
+  try {
+    const res = await fetch(`${API_URL}/api/students/${encodeURIComponent(id)}`, { method: "DELETE", headers: adminHeaders() });
+    const r = await res.json();
+    if (!r.success) throw new Error(r.message);
+    loadStudents();
+  } catch (e) {
+    alert("❌ " + e.message);
+  }
+}
+
+function injectStdStyles() {
+  if (document.getElementById("stdStyles")) return;
+  const s = document.createElement("style");
+  s.id = "stdStyles";
+  s.textContent =
+    ".std-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;background:#f8fafc;padding:14px;border-radius:12px;border:1px solid #e2e8f0;}" +
+    ".std-input{padding:9px 12px;border:1px solid #cbd5e1;border-radius:9px;font-size:13px;min-width:170px;}" +
+    ".std-btn{padding:9px 14px;border:none;border-radius:9px;background:#e2e8f0;font-weight:bold;cursor:pointer;font-size:13px;}" +
+    ".std-btn:hover{filter:brightness(.95);}" +
+    ".std-btn-primary{background:#2563eb;color:#fff;}" +
+    ".std-btn-success{background:#16a34a;color:#fff;}" +
+    ".std-btn-warn{background:#f59e0b;color:#fff;}" +
+    ".std-btn-danger{background:#dc2626;color:#fff;}" +
+    ".std-count{font-size:12px;color:#64748b;margin-bottom:8px;}" +
+    ".std-table-wrap{overflow-x:auto;background:#fff;border-radius:12px;border:1px solid #e2e8f0;}" +
+    ".std-table{width:100%;border-collapse:collapse;font-size:13px;}" +
+    ".std-table th{background:#0f172a;color:#fff;padding:10px;text-align:left;white-space:nowrap;}" +
+    ".std-table td{padding:8px 10px;border-bottom:1px solid #e2e8f0;white-space:nowrap;}" +
+    ".std-badge{padding:4px 10px;border-radius:999px;font-size:11px;font-weight:bold;}" +
+    ".std-badge.ok{background:#dcfce7;color:#166534;}" +
+    ".std-badge.bad{background:#fee2e2;color:#991b1b;}" +
+    ".std-empty,.std-loading{padding:24px;text-align:center;color:#64748b;}" +
+    ".std-alert{padding:14px;background:#fee2e2;color:#991b1b;border-radius:10px;}" +
+    ".std-overlay{position:fixed;inset:0;background:rgba(15,23,42,.55);display:flex;align-items:flex-start;justify-content:center;z-index:999;padding:24px;overflow:auto;}" +
+    ".std-modal{background:#fff;border-radius:16px;max-width:880px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.25);}" +
+    ".std-modal-head{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #e2e8f0;}" +
+    ".std-modal-head h3{margin:0;font-size:16px;}" +
+    ".std-x{border:none;background:#f1f5f9;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:14px;}" +
+    ".std-modal-body{padding:18px 20px;max-height:65vh;overflow:auto;}" +
+    ".std-section{font-size:13px;font-weight:bold;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 12px;margin:14px 0 10px;}" +
+    ".std-section:first-child{margin-top:0;}" +
+    ".std-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;}" +
+    ".std-label{display:block;font-size:12px;font-weight:bold;color:#334155;margin-bottom:5px;}" +
+    ".std-hint{font-size:12px;color:#64748b;align-self:center;}" +
+    ".std-modal-foot{display:flex;gap:10px;padding:14px 20px;border-top:1px solid #e2e8f0;}" +
+    "@media(max-width:700px){.std-grid{grid-template-columns:1fr;}}";
+  document.head.appendChild(s);
 }
