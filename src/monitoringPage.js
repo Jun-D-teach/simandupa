@@ -23,6 +23,7 @@ export function initMonitoringPage() {
         <option value="tidak_hadir">🚫 Tidak Hadir</option>
       </select></div>
     <div style="align-self:end;"><button id="monRefreshBtn" class="mon-btn-primary">🔄 Muat Data</button></div>
+    <div style="align-self:end;"><button id="monWaMonitorBtn" class="mon-btn-primary" style="background:#7c3aed;">📡 Monitor WA</button></div>
   </div>
   <div id="monSummary" class="mon-summary"></div>
   <div id="monTable" class="mon-table-wrap">Memuat data...</div>`;
@@ -31,6 +32,7 @@ export function initMonitoringPage() {
   document.getElementById("monDate").addEventListener("change", () => loadMonitoring());
   document.getElementById("monClass").addEventListener("change", () => loadMonitoring());
   document.getElementById("monView").addEventListener("change", renderFromCache);
+  document.getElementById("monWaMonitorBtn").addEventListener("click", openWaMonitor);
 
   // Klik judul kolom => urutkan
   box.addEventListener("click", (e) => {
@@ -209,7 +211,59 @@ function todayYmd() {
 function escapeHtml(v) {
   return String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
-
+async function openWaMonitor() {
+  const date = document.getElementById("monDate").value || todayYmd();
+  try {
+    const res = await fetch(`${API_URL}/api/admin/wa-monitor?date=${date}`, { headers: { "x-admin-key": localStorage.getItem("simAdminKey") || "" } });
+    const result = await res.json();
+    if (!result.success) throw new Error(result.message || "Gagal memuat");
+    const s = result.summary || {};
+    const rows = result.data || [];
+    const win = window.open("", "_blank", "width=1050,height=680");
+    if (!win) return alert("⚠️ Pop-up diblokir browser.");
+    win.document.write(`<!DOCTYPE html><html><head><title>Monitor WA ${date}</title><style>
+      body{font-family:Arial,sans-serif;padding:20px;color:#111827;}
+      h2{margin:0 0 4px;} p.sub{margin:0 0 14px;color:#64748b;font-size:13px;}
+      .cards{display:flex;gap:10px;margin-bottom:14px;} .card{padding:10px 16px;border-radius:10px;font-weight:bold;}
+      table{border-collapse:collapse;width:100%;} th,td{border:1px solid #d1d5db;padding:6px 8px;font-size:12px;text-align:left;vertical-align:top;}
+      th{background:#0f172a;color:#fff;} tr:nth-child(even){background:#f9fafb;}
+      .st-sent{background:#dcfce7;color:#166534;font-weight:bold;} .st-failed{background:#fee2e2;color:#991b1b;font-weight:bold;} .st-pending{background:#fef9c3;color:#854d0e;font-weight:bold;}
+      button{padding:5px 10px;border:none;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer;font-size:11px;font-weight:bold;}
+      button:disabled{opacity:.5;}
+    </style></head><body>
+      <h2>📡 Monitor Antrean WA — ${date}</h2>
+      <p class="sub">Total ${s.total || 0} • ✅ ${s.sent || 0} terkirim • ⏳ ${s.pending || 0} pending • ❌ ${s.failed || 0} gagal</p>
+      ${rows.length ? `<table><thead><tr><th>Status</th><th>Nomor</th><th>Pesan</th><th>Alasan Gagal</th><th>Waktu</th><th>Aksi</th></tr></thead><tbody>
+        ${rows.map((r) => `<tr>
+          <td class="st-${r.status}">${r.status}</td>
+          <td>${r.phone || "-"}</td>
+          <td style="max-width:340px;">${(r.message || "").replace(/\n/g, "<br>")}</td>
+          <td>${r.last_error || "-"}</td>
+          <td>${r.sent_at || r.created_at || "-"}</td>
+          <td>${r.status === "failed" ? `<button data-resend="${r.id}">🔁 Kirim Ulang</button>` : "-"}</td>
+        </tr>`).join("")}
+      </tbody></table>` : "<p>Tidak ada antrean WA pada tanggal ini.</p>"}
+      <script>
+        const API = "${API_URL}";
+        document.querySelectorAll("[data-resend]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            if (!confirm("Kirim ulang WA ini? Nomor akan dinormalkan otomatis (08.. → 628..) dan diambil dari Data Siswa bila tersedia.")) return;
+            btn.disabled = true; btn.textContent = "⏳...";
+            try {
+              const res = await fetch(API + "/api/admin/wa-resend", { method: "POST", headers: { "Content-Type": "application/json", "x-admin-key": localStorage.getItem("simAdminKey") || "" }, body: JSON.stringify({ queue_id: Number(btn.dataset.resend) }) });
+              const r = await res.json();
+              alert(r.success ? "✅ " + r.message : "❌ " + r.message);
+              if (r.success) { btn.textContent = "⏳ pending"; } else { btn.disabled = false; btn.textContent = "🔁 Kirim Ulang"; }
+            } catch (e) { alert("❌ " + e.message); btn.disabled = false; btn.textContent = "🔁 Kirim Ulang"; }
+          });
+        });
+      </script>
+    </body></html>`);
+    win.document.close();
+  } catch (err) {
+    alert("❌ " + err.message);
+  }
+}
 function injectMonitoringStyles() {
   if (document.getElementById("monitoringStyles")) return;
   const style = document.createElement("style");

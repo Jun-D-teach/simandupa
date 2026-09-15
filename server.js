@@ -4697,6 +4697,59 @@ app.post("/api/teacher/:teacherId/monthly-report/send", async (req, res) => {
     res.status(500).json({ success: false, message: "Gagal mengirim rekap bulanan", error: error.message });
   }
 });
+// ============ MONITOR ANTREAN WA (ADMIN) ============
+app.get("/api/admin/wa-monitor", verifyAdminApiKey, async (req, res) => {
+  try {
+    const { date = "", status = "" } = req.query;
+    const conditions = [];
+    const values = [];
+    if (date) { conditions.push("DATE(w.created_at) = ?"); values.push(date); }
+    if (status) { conditions.push("w.status = ?"); values.push(status); }
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const [rows] = await pool.query(
+      `SELECT w.id, w.phone, w.message, w.attendance_id, w.status, w.retry_count, w.last_error, w.created_at, w.sent_at
+       FROM wa_queue w ${where} ORDER BY w.created_at DESC LIMIT 300`,
+      values,
+    );
+    const summary = {
+      total: rows.length,
+      pending: rows.filter((r) => r.status === "pending").length,
+      sent: rows.filter((r) => r.status === "sent").length,
+      failed: rows.filter((r) => r.status === "failed").length,
+    };
+    res.json({ success: true, summary, data: rows });
+  } catch (error) {
+    console.error("WA MONITOR ERROR:", error);
+    res.status(500).json({ success: false, message: "Gagal memuat monitor WA", error: error.message });
+  }
+});
+
+app.post("/api/admin/wa-resend", verifyAdminApiKey, async (req, res) => {
+  try {
+    const { queue_id, phone = "" } = req.body || {};
+    const [rows] = await pool.query("SELECT * FROM wa_queue WHERE id = ? LIMIT 1", [queue_id]);
+    if (!rows.length) return res.status(404).json({ success: false, message: "Antrean tidak ditemukan" });
+    const q = rows[0];
+    let newPhone = String(phone || "").replace(/\D/g, "");
+    if (!newPhone) {
+      const m = String(q.attendance_id || "").match(/STD-\d{4}-\d+/);
+      if (m) {
+        const [srows] = await pool.query("SELECT parent_phone FROM students WHERE student_id = ? LIMIT 1", [m[0]]);
+        if (srows.length && srows[0].parent_phone) newPhone = String(srows[0].parent_phone).replace(/\D/g, "");
+      }
+    }
+    if (!newPhone) newPhone = String(q.phone || "").replace(/\D/g, "");
+    if (newPhone.startsWith("0")) newPhone = "62" + newPhone.slice(1);
+    if (!/^628[0-9]{8,11}$/.test(newPhone)) {
+      return res.status(400).json({ success: false, message: `Nomor tidak valid: ${newPhone}. Perbaiki nomor di menu Siswa terlebih dahulu (format 628...).` });
+    }
+    await pool.query("UPDATE wa_queue SET phone = ?, status = 'pending', retry_count = 0, last_error = NULL WHERE id = ?", [newPhone, queue_id]);
+    res.json({ success: true, message: `WA ke ${newPhone} dimasukkan ulang ke antrean pengiriman.` });
+  } catch (error) {
+    console.error("WA RESEND ERROR:", error);
+    res.status(500).json({ success: false, message: "Gagal kirim ulang WA", error: error.message });
+  }
+});
 app.use(express.static(path.join(__dirname, "dist")));
 const db = require("./db");
 app.get("*", (req, res) => {
