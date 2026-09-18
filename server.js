@@ -307,7 +307,34 @@ async function logStudentActivity(studentId, action, changes = [], req = null) {
     console.error("STUDENT LOG ERROR:", e);
   }
 }
-
+// ============ TEMPLATE PESAN WA (dapat diubah admin via menu Template WA) ============
+const WA_TEMPLATE_DEFAULTS = {
+  wa_template_masuk: "Ananda {nama} ({kelas}) telah absen masuk pada {hari}, {tanggal} pukul {jam}. Status: {status}.",
+  wa_template_pulang: "Ananda {nama} ({kelas}) telah absen pulang pada {hari}, {tanggal} pukul {jam}. Status: pulang.",
+  wa_template_tidak_hadir: "Assalamu'alaikum wr. wb.\nYth. Bapak/Ibu orang tua/wali dari Ananda {nama} ({kelas}).\n\nKami informasikan bahwa hingga pukul {jam} WIB pada {hari}, {tanggal}, Ananda TIDAK HADIR di sekolah dan belum ada keterangan.\n\nMohon konfirmasi kehadiran Ananda kepada wali kelas. Terima kasih.\n\n- {pengirim}",
+  wa_template_sangat_terlambat: "Assalamu'alaikum wr. wb.\nYth. Bapak/Ibu orang tua/wali dari Ananda {nama} ({kelas}).\n\nKami informasikan bahwa Ananda TELAH HADIR di sekolah pada {hari}, {tanggal} pukul {jam} WIB dengan status SANGAT TERLAMBAT.\n\nMohon bimbingannya agar Ananda berangkat lebih tepat waktu. Terima kasih.\n\n- {pengirim}",
+  wa_pengumuman: "",
+};
+async function getWaTemplates() {
+  try {
+    const [rows] = await pool.query(
+      "SELECT setting_key, setting_value FROM settings WHERE setting_key LIKE 'wa_template_%' OR setting_key = 'wa_pengumuman'",
+    );
+    const map = Object.fromEntries(rows.map((r) => [r.setting_key, r.setting_value || ""]));
+    const out = {};
+    for (const [k, v] of Object.entries(WA_TEMPLATE_DEFAULTS)) {
+      out[k] = map[k] !== undefined && map[k] !== "" ? map[k] : v;
+    }
+    return out;
+  } catch (e) {
+    return { ...WA_TEMPLATE_DEFAULTS };
+  }
+}
+function fillWaTemplate(tpl, vars) {
+  return String(tpl).replace(/\{(\w+)\}/g, (m, k) =>
+    vars[k] !== undefined && vars[k] !== null ? String(vars[k]) : m,
+  );
+}
 function verifyAdminApiKey(req, res, next) {
   const apiKey = req.headers["x-admin-key"];
 
@@ -1399,22 +1426,34 @@ app.post("/api/attendance", async (req, res) => {
       status = getAttendanceStatus(attendanceTime, config.school_start_time, config.school_late_time);
     }
     
-    // 3. Cek Duplikasi
-    const [existingSameStatus] = await connection.query(
-      "SELECT attendance_id FROM attendance WHERE student_id = ? AND attendance_date = ? AND status = ?",
-      [student_id, attendanceDate, status],
-    );
-    if (existingSameStatus.length > 0) {
-      throw { status: 409, message: `Siswa sudah absen dengan status '${status}' hari ini` };
-    }
-    
-    const [todayAttendance] = await connection.query(
-      "SELECT COUNT(*) as count FROM attendance WHERE student_id = ? AND attendance_date = ?",
-      [student_id, attendanceDate],
-    );
-    if (todayAttendance[0].count >= 2) {
-      throw { status: 409, message: "Siswa sudah absen maksimal (hadir & pulang) hari ini" };
-    }
+       // 3. Cek Duplikasi (maksimal 1x masuk & 1x pulang per hari)
+ if (type === "masuk") {
+   const [existingMasuk] = await connection.query(
+     "SELECT attendance_id, status, attendance_time FROM attendance WHERE student_id = ? AND attendance_date = ? AND status IN ('hadir','terlambat','sangat terlambat') LIMIT 1",
+     [student_id, attendanceDate],
+   );
+   if (existingMasuk.length > 0) {
+     throw {
+       status: 409,
+       message: `Siswa sudah absen masuk hari ini pukul ${String(existingMasuk[0].attendance_time).slice(0, 5)} (${existingMasuk[0].status}). Scan kedua ditolak.`,
+     };
+   }
+ } else {
+   const [existingPulang] = await connection.query(
+     "SELECT attendance_id FROM attendance WHERE student_id = ? AND attendance_date = ? AND status = 'pulang' LIMIT 1",
+     [student_id, attendanceDate],
+   );
+   if (existingPulang.length > 0) {
+     throw { status: 409, message: "Siswa sudah absen pulang hari ini" };
+   }
+ }
+ const [todayAttendance] = await connection.query(
+   "SELECT COUNT(*) as count FROM attendance WHERE student_id = ? AND attendance_date = ?",
+   [student_id, attendanceDate],
+ );
+ if (todayAttendance[0].count >= 2) {
+   throw { status: 409, message: "Siswa sudah absen maksimal (hadir & pulang) hari ini" };
+ }
     
     // 4. Simpan ke Database
     const attendanceId = formatAttendanceId(now, student_id);
@@ -1432,7 +1471,17 @@ const NAMA_BULAN = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Ag
 const namaHari = NAMA_HARI[tglObj.getDay()];
 const namaTanggal = `${dd} ${NAMA_BULAN[mm - 1]} ${yy}`;
 
-const message = `Ananda ${student.student_name} (${student.class_id}) telah absen ${type} pada ${namaHari}, ${namaTanggal} pukul ${attendanceTime}. Status: ${status}.`;
+const templates = await getWaTemplates();
+const tpl = type === "pulang" ? templates.wa_template_pulang : templates.wa_template_masuk;
+let message = fillWaTemplate(tpl, {
+  nama: student.student_name,
+  kelas: student.class_id,
+  hari: namaHari,
+  tanggal: namaTanggal,
+  jam: attendanceTime,
+  status: status,
+});
+if (templates.wa_pengumuman) message += `\n\n${templates.wa_pengumuman}`;
       await connection.query(
         "INSERT INTO wa_queue (phone, message, attendance_id, status, created_at) VALUES (?, ?, ?, 'pending', NOW())",
         [student.parent_phone, message, attendanceId]
@@ -3945,9 +3994,19 @@ app.post("/api/monitoring/notify", async (req, res) => {
       ? `Wali Kelas ${student.class_id} (${student.wali_kelas_name || "-"})`
       : "Admin MAN 2 Palembang";
 
-    const message = notify_type === "sangat_terlambat"
-      ? `Assalamu'alaikum wr. wb.\nYth. Bapak/Ibu orang tua/wali dari Ananda ${student.student_name} (${student.class_id}).\n\nKami informasikan bahwa Ananda TELAH HADIR di sekolah pada ${hari}, ${tanggal} pukul ${jam} WIB dengan status SANGAT TERLAMBAT.\n\nMohon bimbingannya agar Ananda berangkat lebih tepat waktu. Terima kasih.\n\n- ${senderLabel}`
-      : `Assalamu'alaikum wr. wb.\nYth. Bapak/Ibu orang tua/wali dari Ananda ${student.student_name} (${student.class_id}).\n\nKami informasikan bahwa hingga pukul ${jam} WIB pada ${hari}, ${tanggal}, Ananda TIDAK HADIR di sekolah dan belum ada keterangan.\n\nMohon konfirmasi kehadiran Ananda kepada wali kelas. Terima kasih.\n\n- ${senderLabel}`;
+    const templates = await getWaTemplates();
+const tpl = notify_type === "sangat_terlambat"
+  ? templates.wa_template_sangat_terlambat
+  : templates.wa_template_tidak_hadir;
+let message = fillWaTemplate(tpl, {
+  nama: student.student_name,
+  kelas: student.class_id,
+  hari: hari,
+  tanggal: tanggal,
+  jam: jam,
+  pengirim: senderLabel,
+});
+if (templates.wa_pengumuman) message += `\n\n${templates.wa_pengumuman}`;
 
     // 3) Masuk antrean WA (dikirim worker, tetap anti-spam)
     await pool.query(

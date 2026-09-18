@@ -22,13 +22,17 @@ export function initMonitoringPage() {
         <option value="belum_pulang">🏠 Belum Absen Pulang</option>
         <option value="tidak_hadir">🚫 Tidak Hadir</option>
       </select></div>
-    <div style="align-self:end;"><button id="monRefreshBtn" class="mon-btn-primary">🔄 Muat Data</button></div>
+    <div style="align-self:end; display:flex; gap:8px;">
+      <button id="monTemplateBtn" class="mon-btn-primary" style="background:#7c3aed;">📝 Template WA</button>
+      <button id="monRefreshBtn" class="mon-btn-primary">🔄 Muat Data</button>
+    </div>
     <div style="align-self:end;"><button id="monWaMonitorBtn" class="mon-btn-primary" style="background:#7c3aed;">📡 Monitor WA</button></div>
   </div>
   <div id="monSummary" class="mon-summary"></div>
   <div id="monTable" class="mon-table-wrap">Memuat data...</div>`;
 
   document.getElementById("monRefreshBtn").addEventListener("click", () => loadMonitoring());
+  document.getElementById("monTemplateBtn").addEventListener("click", openTemplateEditor);
   document.getElementById("monDate").addEventListener("change", () => loadMonitoring());
   document.getElementById("monClass").addEventListener("change", () => loadMonitoring());
   document.getElementById("monView").addEventListener("change", renderFromCache);
@@ -262,6 +266,60 @@ async function openWaMonitor() {
     win.document.close();
   } catch (err) {
     alert("❌ " + err.message);
+  }
+}
+async function openTemplateEditor() {
+  const KEYS = [
+    ["wa_template_masuk", "Template WA Absen Masuk"],
+    ["wa_template_pulang", "Template WA Absen Pulang (untuk info pulang cepat dll)"],
+    ["wa_template_tidak_hadir", "Template WA Tidak Hadir"],
+    ["wa_template_sangat_terlambat", "Template WA Sangat Terlambat"],
+    ["wa_pengumuman", "Pengumuman tambahan (ditempel di akhir semua WA masuk/pulang — KOSONGKAN bila tidak ada)"],
+  ];
+  try {
+    const res = await fetch(`${API_URL}/api/settings`, {
+      headers: { "x-admin-key": localStorage.getItem("simAdminKey") || "" },
+    });
+    const result = await res.json();
+    const cur = result.data || {};
+    const old = document.getElementById("waTemplateModal");
+    if (old) old.remove();
+    const modal = document.createElement("div");
+    modal.id = "waTemplateModal";
+    modal.style.cssText = "position:fixed;inset:0;background:rgba(15,23,42,.6);z-index:999;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:24px;";
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:16px;max-width:760px;width:100%;padding:20px;">
+        <h3 style="margin:0 0 6px;">📝 Template Pesan WA</h3>
+        <p style="margin:0 0 12px;font-size:12px;color:#64748b;">
+          Placeholder tersedia: <code>{nama}</code> <code>{kelas}</code> <code>{hari}</code> <code>{tanggal}</code> <code>{jam}</code> <code>{status}</code> <code>{pengirim}</code>.
+          Template yang dikosongkan = pakai kalimat default.
+        </p>
+        ${KEYS.map(([k, label]) => `
+          <div style="margin-bottom:10px;">
+            <label style="display:block;font-size:12px;font-weight:bold;color:#334155;margin-bottom:4px;">${label}</label>
+            <textarea id="tpl_${k}" rows="3" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;font-family:inherit;">${escapeHtml(cur[k] || "")}</textarea>
+          </div>`).join("")}
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+          <button id="tplCancel" class="mon-btn-primary" style="background:#e2e8f0;color:#0f172a;">Batal</button>
+          <button id="tplSave" class="mon-btn-primary">💾 Simpan Template</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    document.getElementById("tplCancel").addEventListener("click", () => modal.remove());
+    document.getElementById("tplSave").addEventListener("click", async () => {
+      const payload = {};
+      KEYS.forEach(([k]) => { payload[k] = document.getElementById(`tpl_${k}`).value; });
+      const res = await fetch(`${API_URL}/api/settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-key": localStorage.getItem("simAdminKey") || "" },
+        body: JSON.stringify(payload),
+      });
+      const r = await res.json();
+      alert(r.success ? "✅ Template WA tersimpan." : "❌ " + r.message);
+      if (r.success) modal.remove();
+    });
+  } catch (e) {
+    alert("❌ " + e.message);
   }
 }
 function injectMonitoringStyles() {
