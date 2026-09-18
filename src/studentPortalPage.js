@@ -33,7 +33,7 @@ export function initStudentPortalPage() {
   <div class="sps-wrap">
     <div class="sps-header">
       <div style="display:flex;gap:12px;align-items:flex-start;">
-        <div class="sps-logo">🎓</div>
+        <div class="sps-logo"><img id="sp_header_photo" src="/public/logo-man2.png" alt="Foto Siswa" style="width:100%;height:100%;object-fit:cover;border-radius:10px;" /></div>
         <div>
           <h1>Portal Siswa</h1>
           <p>MAN 2 Palembang — kolom bertanda 🔒 tidak dapat diubah.</p>
@@ -78,7 +78,17 @@ export function initStudentPortalPage() {
         <p id="sp_qr_note" class="sps-muted" style="display:none;">QR belum dibuat. Hubungi admin/operator madrasah.</p>
       </div>
     </div>
-
+<div style="padding:16px;border:1px solid #e5e7eb;border-radius:12px;margin-bottom:16px;background:#fff;">
+  <h3 style="margin:0 0 8px;">📷 Foto Kartu Siswa</h3>
+  <p style="margin:0 0 10px;font-size:12px;color:#6b7280;">Upload foto untuk kartu siswa (otomatis dikompres ±10–20KB agar tidak memberatkan hosting). JPG/PNG, posisi portrait.</p>
+  <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+    <img id="spPhotoPreview" src="" alt="Foto siswa" style="width:90px;height:110px;object-fit:cover;border:1px solid #d1d5db;border-radius:8px;background:#f3f4f6;display:none;" />
+    <div>
+      <input type="file" id="spPhotoFile" accept="image/png,image/jpeg" style="font-size:12px;" />
+      <div id="spPhotoMsg" style="margin-top:6px;font-size:12px;"></div>
+    </div>
+  </div>
+</div>
     <div class="sps-card">
       <h2>🔑 Ganti Password</h2>
       <div class="sps-grid">
@@ -129,6 +139,11 @@ function fillProfile(s) {
   set("sp_status", s.status_active || "-"); set("sp_username", s.username || "-");
   set("sp_created", String(s.created_at || "-").replace("T", " ").slice(0, 19));
   set("sp_updated", String(s.updated_at || "-").replace("T", " ").slice(0, 19));
+  const headerPhoto = document.getElementById("sp_header_photo");
+if (headerPhoto) {
+  headerPhoto.onerror = () => { headerPhoto.src = "/public/logo-man2.png"; };
+  headerPhoto.src = s.photo_url ? `${s.photo_url}?t=${Date.now()}` : "/public/logo-man2.png";
+}
   const qr = document.getElementById("sp_qr_img");
   const note = document.getElementById("sp_qr_note");
   if (s.qr_code) { qr.src = s.qr_code; qr.style.display = "inline-block"; note.style.display = "none"; }
@@ -266,3 +281,52 @@ function injectSpsStyles() {
     "@media(max-width:760px){.sps-grid{grid-template-columns:1fr;}}";
   document.head.appendChild(s);
 }
+// ===== UPLOAD FOTO KARTU: kompresi client-side =====
+function spCompressImage(file, maxW = 200, maxH = 250, quality = 0.7) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, maxW / img.width, maxH / img.height);
+        const c = document.createElement("canvas");
+        c.width = Math.round(img.width * scale);
+        c.height = Math.round(img.height * scale);
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL("image/jpeg", quality));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+document.addEventListener("change", async (e) => {
+  const input = e.target.closest("#spPhotoFile");
+  if (!input) return;
+  const file = input.files[0];
+  if (!file) return;
+  const msg = document.getElementById("spPhotoMsg");
+  const preview = document.getElementById("spPhotoPreview");
+  const student = JSON.parse(localStorage.getItem("simStudent") || "null");
+  if (!student) { alert("Login siswa tidak ditemukan."); return; }
+  try {
+    msg.textContent = "⏳ Mengompres & mengupload...";
+    const dataUrl = await spCompressImage(file);
+    const res = await fetch(`${API_URL}/api/student/upload-photo`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ student_id: student.student_id, photo: dataUrl }),
+    });
+    const r = await res.json();
+    if (!r.success) throw new Error(r.message);
+    msg.innerHTML = `✅ ${r.message} (±${Math.max(1, Math.round((dataUrl.length * 0.75) / 1024))} KB)`;
+    if (preview) { preview.src = dataUrl; preview.style.display = "block"; }
+const hp = document.getElementById("sp_header_photo");
+if (hp) hp.src = dataUrl;
+    input.value = "";
+  } catch (err) {
+    msg.textContent = "❌ " + err.message;
+  }
+});

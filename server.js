@@ -144,6 +144,21 @@ function formatAttendanceId(dateObj, studentId) {
   return `${year}${month}${day}_${studentId}_${hours}${minutes}${seconds}`;
 }
 async function ensureSchema() {
+    // ✅ Pastikan kolom photo_url ada (untuk foto kartu siswa)
+  try {
+    const [stuCols] = await pool.query(
+      `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'students' AND COLUMN_NAME = 'photo_url'`,
+    );
+    if (!stuCols.length) {
+      await pool.query(
+        `ALTER TABLE students ADD COLUMN photo_url VARCHAR(255) DEFAULT NULL AFTER qr_code`,
+      );
+      console.log("Schema: kolom students.photo_url ditambahkan");
+    }
+  } catch (e) {
+    console.error("Gagal memastikan kolom photo_url:", e.message);
+  }
   const requiredStatuses = [
     "hadir",
     "terlambat",
@@ -493,14 +508,15 @@ app.get("/api/students/:studentId", async (req, res) => {
       parent_name,
       parent_phone,
       parent_email,
-      parent_relation,
-      username,
-      qr_code,
-      created_at,
-      updated_at
-    FROM students
-    WHERE student_id = ?
-    LIMIT 1
+        parent_relation,
+   username,
+   qr_code,
+   photo_url,
+   created_at,
+   updated_at
+ FROM students
+ WHERE student_id = ?
+ LIMIT 1
     `,
       [studentId],
     );
@@ -4853,126 +4869,190 @@ app.post("/api/admin/wa-resend", verifyAdminApiKey, async (req, res) => {
   }
 });
 // ============ CETAK KARTU QR UKURAN KTP (85,6 x 54 mm) ============
+// ============ CETAK KARTU SISWA UKURAN KTP (+foto +ttd) ============
+// ============ CETAK KARTU SISWA UKURAN KTP (85,6 x 54 mm) + KOP ============
 app.get("/api/export/qr-cards", async (req, res) => {
   try {
-    const { classId = "", ids = "", telp = "1", alamat = "1" } = req.query;
-    const showTelp = telp !== "0";
-    const showAlamat = alamat !== "0";
-    const esc = (v) => String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
-
+    const { classId = "", ids = "" } = req.query;
     let rows = [];
     if (ids) {
       const idList = String(ids).split(",").map((s) => s.trim()).filter(Boolean);
-      if (idList.length) {
-        [rows] = await pool.query(
-          `SELECT student_id, nis, nisn, student_name, class_id, parent_phone, address, qr_code
-           FROM students WHERE student_id IN (?) ORDER BY class_id ASC, student_name ASC`,
-          [idList],
-        );
-      }
+      if (!idList.length) return res.status(400).send("ids tidak valid");
+      [rows] = await pool.query(
+        `SELECT student_id, student_name, nisn, class_id, parent_phone, address, qr_code, photo_url FROM students WHERE student_id IN (?) ORDER BY class_id ASC, student_name ASC`,
+        [idList],
+      );
     } else if (classId) {
       [rows] = await pool.query(
-        `SELECT student_id, nis, nisn, student_name, class_id, parent_phone, address, qr_code
-         FROM students WHERE class_id = ? AND status_active = 'aktif' ORDER BY student_name ASC`,
+        `SELECT student_id, student_name, nisn, class_id, parent_phone, address, qr_code, photo_url FROM students WHERE class_id = ? AND status_active = 'aktif' ORDER BY student_name ASC`,
         [classId],
       );
     } else {
       [rows] = await pool.query(
-        `SELECT student_id, nis, nisn, student_name, class_id, parent_phone, address, qr_code
-         FROM students WHERE status_active = 'aktif' ORDER BY class_id ASC, student_name ASC`,
+        `SELECT student_id, student_name, nisn, class_id, parent_phone, address, qr_code, photo_url FROM students WHERE status_active = 'aktif' ORDER BY class_id ASC, student_name ASC`,
       );
     }
-    if (!rows.length) return res.status(404).send("Tidak ada data siswa untuk dicetak.");
-
-    // Pastikan QR ada (generate otomatis bila belum)
-    const cards = [];
-    for (const s of rows) {
-      let qr = s.qr_code;
-      if (!qr || !String(qr).startsWith("data:image")) {
-        qr = await QRCode.toDataURL(s.student_id, { margin: 1, width: 220 });
+    if (!rows.length) return res.status(404).send("Tidak ada data siswa");
+    for (const r of rows) {
+      if (!r.qr_code || !String(r.qr_code).startsWith("data:image")) {
+        r.qr_code = await QRCode.toDataURL(r.student_id, { margin: 1, width: 200 });
       }
-      cards.push({ ...s, qr });
     }
-
     const [setRows] = await pool.query("SELECT setting_key, setting_value FROM settings");
     const cfg = Object.fromEntries(setRows.map((r) => [r.setting_key, r.setting_value]));
-    const schoolName = cfg.school_name || "MAN 2 Palembang";
-    const schoolYear = cfg.current_school_year || "2025/2026";
-    const semester = cfg.current_semester || "Ganjil";
-
+    const place = cfg.card_place || "Palembang";
+    const signer = cfg.principal_name || "Kepala Madrasah";
+    const ttd = cfg.card_ttd_url || "";
+    const schoolAddress = cfg.school_address || "Jl. Prof. KH. Zainal Abidin Fikri, Komplek UIN Raden Fatah, Palembang";
+    const logoUrl = cfg.school_logo_url || "/public/logo.png";
+    const printDate = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
+    const bust = Date.now();
+    const esc = (v) => String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+    const cards = rows.map((s) => {
+      const photo = s.photo_url ? `${s.photo_url}?t=${bust}` : "";
+      return `
+      <div class="card">
+        <div class="kop">
+          <img class="kop-logo" src="${logoUrl}?t=${bust}" alt="logo"/>
+          <div class="kop-text">
+            <div class="k1">KEMENTERIAN AGAMA REPUBLIK INDONESIA</div>
+            <div class="k2">KANTOR WILAYAH KEMENTERIAN AGAMA PROVINSI SUMATERA SELATAN</div>
+            <div class="k3">MADRASAH ALIYAH NEGERI 2 PALEMBANG</div>
+            <div class="k4">${esc(schoolAddress)}</div>
+          </div>
+          <div class="card-title">KARTU<br>SISWA</div>
+        </div>
+        <div class="ident">
+          <div class="std-name">${esc(s.student_name)}</div>
+          <div class="std-line">
+            <span>Kelas: <b>${esc(s.class_id)}</b></span>
+            <span>NISN: <b>${esc(s.nisn || "-")}</b></span>
+            <span>ID: <b>${esc(s.student_id)}</b></span>
+          </div>
+          <div class="std-line">
+            <span>Telp: <b>${esc(s.parent_phone || "-")}</b></span>
+            <span class="addr">${esc(s.address || "")}</span>
+          </div>
+        </div>
+        <div class="bottom">
+          <div class="photo">${photo ? `<img src="${photo}" alt="foto"/>` : `<div class="no-photo">FOTO<br>3×4</div>`}</div>
+          <div class="qr"><img src="${s.qr_code}" alt="QR ${esc(s.student_id)}"/></div>
+          <div class="sign">
+            <div>${esc(place)}, ${printDate}</div>
+            <div>Kepala Madrasah,</div>
+            ${ttd ? `<img class="ttd" src="${ttd}?t=${bust}" alt="ttd"/>` : `<div class="ttd-space"></div>`}
+            <div class="sign-name">${esc(signer)}</div>
+          </div>
+        </div>
+      </div>`;
+    }).join("");
     const html = `<!DOCTYPE html>
 <html lang="id">
 <head>
 <meta charset="UTF-8"/>
-<title>Kartu Absensi QR - ${esc(schoolName)}</title>
+<title>Kartu Siswa - MAN 2 Palembang</title>
 <style>
-  * { box-sizing: border-box; }
-  body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 6mm; color: #111; background: #fff; }
-  .bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4mm; }
-  .bar h1 { font-size: 14pt; margin: 0; }
-  .bar .sub { font-size: 9pt; color: #555; margin-top: 2px; }
-  .btn { background: #2563eb; color: #fff; border: none; border-radius: 8px; padding: 8px 14px; font-weight: bold; cursor: pointer; }
-  .sheet { display: flex; flex-wrap: wrap; gap: 2.6mm; }
-  .card {
-    width: 85.6mm; height: 54mm; padding: 2.2mm 2.6mm;
-    border: 0.9pt dashed #94a3b8; border-radius: 2.8mm;
-    page-break-inside: avoid; break-inside: avoid; overflow: hidden; position: relative; background: #fff;
-  }
-  .head { display: flex; justify-content: space-between; align-items: center; border-bottom: 0.8pt solid #1e3a8a; padding-bottom: 1mm; margin-bottom: 1.4mm; }
-  .head .school { font-size: 6.8pt; font-weight: bold; color: #1e3a8a; letter-spacing: 0.2pt; }
-  .head .title { font-size: 6.2pt; font-weight: bold; color: #b45309; }
-  .body { display: flex; gap: 2.2mm; }
-  .qr { width: 25mm; height: 25mm; flex: 0 0 25mm; border: 0.6pt solid #cbd5e1; border-radius: 1.2mm; padding: 0.8mm; background: #fff; }
-  .qr img { width: 100%; height: 100%; display: block; }
-  .fields { flex: 1; min-width: 0; font-size: 6.6pt; line-height: 1.32; }
-  .row { display: flex; }
-  .lbl { flex: 0 0 13mm; color: #475569; font-weight: bold; }
-  .val { flex: 1; min-width: 0; font-weight: bold; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .alamat { margin-top: 0.6mm; font-size: 6pt; color: #334155; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .foot { position: absolute; left: 2.6mm; right: 2.6mm; bottom: 1.6mm; display: flex; justify-content: space-between; font-size: 5.6pt; color: #64748b; border-top: 0.6pt solid #e2e8f0; padding-top: 0.8mm; }
-  @media print {
-    body { padding: 0; }
-    .bar { display: none; }
-    @page { size: A4 portrait; margin: 6mm; }
-  }
+* { box-sizing: border-box; }
+body { font-family: Arial, sans-serif; margin: 0; padding: 16px; background: #f3f4f6; color: #111827; }
+.print-bar { display: flex; gap: 10px; justify-content: flex-end; margin: 0 auto 12px; max-width: 1200px; }
+.btn { background: #2563eb; color: #fff; border: none; border-radius: 8px; padding: 9px 14px; font-weight: bold; cursor: pointer; }
+.sheet { display: flex; flex-wrap: wrap; gap: 2.5mm; max-width: 1200px; margin: 0 auto; }
+.card { width: 85.6mm; height: 54mm; background: #fff; border: 0.7pt solid #9ca3af; border-radius: 2.5mm; padding: 1.8mm 2.2mm; display: flex; flex-direction: column; overflow: hidden; page-break-inside: avoid; break-inside: avoid; }
+.kop { display: flex; gap: 1.5mm; align-items: center; border-bottom: 0.8pt solid #111; padding-bottom: 1mm; }
+.kop-logo { width: 9.5mm; height: 9.5mm; object-fit: contain; flex-shrink: 0; }
+.kop-text { flex: 1; min-width: 0; text-align: center; line-height: 1.15; }
+.k1 { font-size: 4.6pt; font-weight: bold; }
+.k2 { font-size: 4.2pt; font-weight: bold; }
+.k3 { font-size: 6.4pt; font-weight: bold; }
+.k4 { font-size: 3.9pt; }
+.card-title { border: 0.8pt solid #b45309; color: #b45309; font-weight: bold; font-size: 6pt; padding: 0.8mm 1.2mm; text-align: center; line-height: 1.15; border-radius: 1mm; flex-shrink: 0; }
+.ident { margin: 1.6mm 0 1mm; }
+.std-name { font-size: 10pt; font-weight: bold; color: #0f172a; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.std-line { display: flex; gap: 3mm; font-size: 6.4pt; color: #374151; margin-top: 0.7mm; }
+.std-line .addr { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #4b5563; }
+.bottom { margin-top: auto; display: flex; gap: 2mm; align-items: flex-end; }
+.photo { width: 12.5mm; height: 16mm; border: 0.5pt solid #6b7280; background: #e5e7eb; overflow: hidden; flex-shrink: 0; }
+.photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.no-photo { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 5pt; color: #6b7280; text-align: center; }
+.qr { width: 16mm; height: 16mm; border: 0.5pt solid #cbd5e1; background: #fff; padding: 0.6mm; flex-shrink: 0; }
+.qr img { width: 100%; height: 100%; display: block; }
+.sign { flex: 1; min-width: 0; text-align: right; font-size: 5.4pt; line-height: 1.3; }
+.ttd { height: 6.5mm; max-width: 22mm; }
+.ttd-space { height: 6.5mm; }
+.sign-name { font-weight: bold; font-size: 5.8pt; }
+@media print {
+  body { background: #fff; padding: 0; }
+  .print-bar { display: none; }
+  .sheet { max-width: 100%; }
+  @page { size: A4 portrait; margin: 8mm; }
+}
 </style>
 </head>
 <body>
-<div class="bar">
-  <div>
-    <h1>🪪 Kartu Absensi QR — ${esc(schoolName)}</h1>
-    <div class="sub">Ukuran kartu KTP (85,6 × 54 mm) • ${cards.length} kartu • TA ${esc(schoolYear)} ${esc(semester)} — gunting sesuai garis putus-putus</div>
-  </div>
-  <button class="btn" onclick="window.print()">🖨 Cetak</button>
-</div>
-<div class="sheet">
-${cards.map((c) => `
-  <div class="card">
-    <div class="head">
-      <div class="school">${esc(schoolName.toUpperCase())}</div>
-      <div class="title">KARTU ABSENSI QR</div>
-    </div>
-    <div class="body">
-      <div class="qr"><img src="${c.qr}" alt="QR ${esc(c.student_id)}"/></div>
-      <div class="fields">
-        <div class="row"><span class="lbl">Nama</span><span class="val">: ${esc(c.student_name)}</span></div>
-        <div class="row"><span class="lbl">Kelas</span><span class="val">: ${esc(c.class_id)}</span></div>
-        <div class="row"><span class="lbl">NISN</span><span class="val">: ${esc(c.nisn || "-")}</span></div>
-        <div class="row"><span class="lbl">ID</span><span class="val">: ${esc(c.student_id)}</span></div>
-        ${showTelp ? `<div class="row"><span class="lbl">No. Telp</span><span class="val">: ${esc(c.parent_phone || "-")}</span></div>` : ""}
-        ${showAlamat && c.address ? `<div class="alamat">${esc(c.address)}</div>` : ""}
-      </div>
-    </div>
-    <div class="foot"><span>TA ${esc(schoolYear)} • ${esc(semester)}</span><span>${esc(c.class_id)} • ${esc(c.student_id)}</span></div>
-  </div>`).join("")}
-</div>
+<div class="print-bar"><button class="btn" onclick="window.print()">🖨 Cetak / Simpan PDF</button></div>
+<div class="sheet">${cards}</div>
 </body>
 </html>`;
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.send(html);
   } catch (error) {
     console.error("EXPORT QR CARDS ERROR:", error);
-    res.status(500).send("Gagal membuat kartu QR");
+    res.status(500).send("Gagal membuat kartu");
+  }
+});
+// ============ UPLOAD FOTO & TTD (file di disk, DB hanya menyimpan path) ============
+const UPLOAD_PHOTO_DIR = path.join(__dirname, "public", "uploads", "photos");
+const UPLOAD_TTD_DIR = path.join(__dirname, "public", "uploads", "ttd");
+fs.mkdirSync(UPLOAD_PHOTO_DIR, { recursive: true });
+fs.mkdirSync(UPLOAD_TTD_DIR, { recursive: true });
+
+function parseDataUrl(dataUrl) {
+  const m = String(dataUrl || "").match(/^data:image\/(png|jpe?g|webp);base64,(.+)$/);
+  if (!m) return null;
+  const ext = m[1] === "png" ? "png" : "jpg";
+  const buf = Buffer.from(m[2], "base64");
+  return { ext, buf };
+}
+
+// Siswa upload foto kartunya sendiri (sudah dikompres di browser)
+app.post("/api/student/upload-photo", async (req, res) => {
+  try {
+    const { student_id, photo } = req.body || {};
+    if (!student_id || !photo) return res.status(400).json({ success: false, message: "Data tidak lengkap" });
+    const img = parseDataUrl(photo);
+    if (!img) return res.status(400).json({ success: false, message: "Format gambar tidak didukung (pakai JPG/PNG)" });
+    if (img.buf.length > 300 * 1024) return res.status(400).json({ success: false, message: "Foto terlalu besar (maks 300KB). Kompres ulang." });
+    const [rows] = await pool.query("SELECT student_id FROM students WHERE student_id = ? LIMIT 1", [student_id]);
+    if (!rows.length) return res.status(404).json({ success: false, message: "Siswa tidak ditemukan" });
+    const fileName = `${student_id}.${img.ext}`;
+    fs.writeFileSync(path.join(UPLOAD_PHOTO_DIR, fileName), img.buf);
+    const url = `/public/uploads/photos/${fileName}`;
+    await pool.query("UPDATE students SET photo_url = ? WHERE student_id = ?", [url, student_id]);
+    res.json({ success: true, message: "Foto berhasil diupload", url });
+  } catch (error) {
+    console.error("UPLOAD PHOTO ERROR:", error);
+    res.status(500).json({ success: false, message: "Gagal upload foto" });
+  }
+});
+
+// Admin upload tanda tangan untuk kartu
+app.post("/api/admin/upload-ttd", verifyAdminApiKey, async (req, res) => {
+  try {
+    const { ttd } = req.body || {};
+    const img = parseDataUrl(ttd);
+    if (!img) return res.status(400).json({ success: false, message: "Format gambar tidak didukung (pakai JPG/PNG)" });
+    if (img.buf.length > 300 * 1024) return res.status(400).json({ success: false, message: "Ttd terlalu besar (maks 300KB)" });
+    const fileName = `card-ttd.${img.ext}`;
+    fs.writeFileSync(path.join(UPLOAD_TTD_DIR, fileName), img.buf);
+    const url = `/public/uploads/ttd/${fileName}`;
+    await pool.query(
+      "INSERT INTO settings (setting_key, setting_value) VALUES ('card_ttd_url', ?) ON DUPLICATE KEY UPDATE setting_value = ?",
+      [url, url],
+    );
+    res.json({ success: true, message: "Tanda tangan berhasil diupload", url });
+  } catch (error) {
+    console.error("UPLOAD TTD ERROR:", error);
+    res.status(500).json({ success: false, message: "Gagal upload tanda tangan" });
   }
 });
 app.use(express.static(path.join(__dirname, "dist")));

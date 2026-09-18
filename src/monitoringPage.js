@@ -22,8 +22,9 @@ export function initMonitoringPage() {
         <option value="belum_pulang">🏠 Belum Absen Pulang</option>
         <option value="tidak_hadir">🚫 Tidak Hadir</option>
       </select></div>
-    <div style="align-self:end; display:flex; gap:8px;">
+  <div style="align-self:end; display:flex; gap:8px; flex-wrap:wrap;">
       <button id="monTemplateBtn" class="mon-btn-primary" style="background:#7c3aed;">📝 Template WA</button>
+      <button id="monTtdBtn" class="mon-btn-primary" style="background:#16a34a;">🖋 Upload TTD</button>
       <button id="monRefreshBtn" class="mon-btn-primary">🔄 Muat Data</button>
     </div>
     <div style="align-self:end;"><button id="monWaMonitorBtn" class="mon-btn-primary" style="background:#7c3aed;">📡 Monitor WA</button></div>
@@ -32,6 +33,31 @@ export function initMonitoringPage() {
   <div id="monTable" class="mon-table-wrap">Memuat data...</div>`;
 
   document.getElementById("monRefreshBtn").addEventListener("click", () => loadMonitoring());
+  document.getElementById("monTtdBtn").addEventListener("click", () => {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/png,image/jpeg";
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    try {
+      const dataUrl = await compressImageForTtd(file);
+      const res = await fetch(`${API_URL}/api/admin/upload-ttd`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-key": localStorage.getItem("simAdminKey") || "",
+        },
+        body: JSON.stringify({ ttd: dataUrl }),
+      });
+      const r = await res.json();
+      alert(r.success ? "✅ Tanda tangan tersimpan. Kartu berikutnya otomatis memakai ttd ini." : "❌ " + r.message);
+    } catch (e) {
+      alert("❌ " + e.message);
+    }
+  };
+  input.click();
+});
   document.getElementById("monTemplateBtn").addEventListener("click", openTemplateEditor);
   document.getElementById("monDate").addEventListener("change", () => loadMonitoring());
   document.getElementById("monClass").addEventListener("change", () => loadMonitoring());
@@ -352,4 +378,24 @@ function injectMonitoringStyles() {
   .mon-empty{padding:24px;text-align:center;color:#64748b;}
   .mon-alert{padding:14px;background:#fee2e2;color:#991b1b;border-radius:10px;}`;
   document.head.appendChild(style);
+}
+function compressImageForTtd(file, maxW = 400, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, maxW / img.width);
+        const c = document.createElement("canvas");
+        c.width = Math.round(img.width * scale);
+        c.height = Math.round(img.height * scale);
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL(file.type === "image/png" ? "image/png" : "image/jpeg", quality));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
