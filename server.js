@@ -3114,7 +3114,7 @@ const html = `
 <div class="page">
   <div class="print-bar"><button class="print-btn" onclick="window.print()">Cetak / Simpan PDF</button></div>
   <div class="kop">
-    <div class="logo"><img src="/public/logo-man2.png" alt="Logo MAN 2" /></div>
+    <div class="logo"><img src="/public/logo.png" alt="Logo MAN 2" /></div>
     <div class="kop-text">
       <h1>MAN 2 PALEMBANG</h1>
       <h2>REKAP ABSENSI SISWA PER KELAS (JAM MASUK & PULANG)</h2>
